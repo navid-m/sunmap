@@ -1,0 +1,92 @@
+val buf   = use("./buffer.sx")
+val paths = use("./paths.sx")
+val world = use("../map/world.sx")
+val brush = use("../map/brush.sx")
+val math  = use("../core/math.sx")
+val str   = use("../core/strutil.sx")
+val fs    = use("std/fs")
+
+fn append_face_line(
+    out: mut ref buf.Buf,
+    p0: math.Vec3,
+    p2: math.Vec3,
+    p1: math.Vec3,
+    tn: ref u8,
+    u: math.Vec3,
+    v: math.Vec3,
+    tw: f64,
+    th: f64
+) void = {
+    val tmp: mut [1024]u8 = @zeroed
+    @snprintf(
+        @addr(tmp) as ref u8,
+        1024,
+        "( {f} {f} {f} ) ( {f} {f} {f} ) ( {f} {f} {f} ) {s} [ {f} {f} {f} 0 ] [ {f} {f} {f} 0 ] 0 {f} {f}\n",
+        {
+            p0.x, p0.y, p0.z,
+            p2.x, p2.y, p2.z,
+            p1.x, p1.y, p1.z,
+            tn,
+            u.x, u.y, u.z,
+            v.x, v.y, v.z,
+            tw, th
+        }
+    )
+    buf.append_str(out, @addr(tmp) as ref u8)
+}
+
+pub fn write_map(w: mut ref world.World) bool = trust {
+    if !paths.ensure_export(w) {
+        return false
+    }
+
+    val out: mut buf.Buf = buf.create()
+    buf.append_str(@addr(out), "// sunmap - Quake / Valve 220 map\n")
+    buf.append_str(@addr(out), "// entity 0\n{\n")
+    buf.append_str(@addr(out), "\"classname\" \"worldspawn\"\n")
+    buf.append_str(@addr(out), "\"wad\" \"textures\"\n")
+
+    val bi: mut i32 = 0
+    for {
+        if bi >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = world.brush_at(w, bi)
+        if b.valid {
+            buf.append_fmt(@addr(out), "// brush {d}\n\{\n", {bi})
+            val fi: mut i32 = 0
+            for {
+                if fi >= b.face_count {
+                    break
+                }
+                val f = brush.face(b, fi)
+                val n = f.normal
+                val u = math.tangent_for_normal(n)
+                val v = math.bitangent_for_normal(n, u)
+                val p0 = brush.face_vert(b, fi, 0)
+                val p1 = brush.face_vert(b, fi, 1)
+                val p2 = brush.face_vert(b, fi, 2)
+                val tex = world.texture_at(w, b.tex)
+                val tn: mut [64]u8 = @zeroed
+                str.sanitize(@addr(tn) as ref u8, 64, tex.name)
+                val tw = world.texture_width(w, b.tex)
+                val th = world.texture_height(w, b.tex)
+                append_face_line(@addr(out), p0, p2, p1, @addr(tn) as ref u8, u, v, tw, th)
+                fi++
+            }
+            buf.append_str(@addr(out), "}\n")
+        }
+        bi++
+    }
+    buf.append_str(@addr(out), "}\n")
+
+    val safe: mut [64]u8 = @zeroed
+    paths.safe_name(w, @addr(safe) as ref u8, 64)
+    val fname: mut [128]u8 = @zeroed
+    @snprintf(@addr(fname) as ref u8, 128, "{s}.map", {@addr(safe) as ref u8})
+    val path: mut [512]u8 = @zeroed
+    paths.export_file(w, @addr(path) as ref u8, 512, @addr(fname) as ref u8)
+    val wrote = fs.write_all_bytes(@addr(path) as ref u8, out.data as ref void, out.len)
+    buf.free(@addr(out))
+    return wrote
+}

@@ -1,0 +1,116 @@
+val mem = use("../core/mem.sx")
+
+pub type Buf = {
+    data: mut ref u8
+    len: mut i64
+    cap: mut i64
+}
+
+pub fn create() Buf = {
+    return Buf{data: none, len: 0, cap: 0}
+}
+
+pub fn reserve(b: mut ref Buf, need: i64) void = {
+    if need <= b.cap {
+        return
+    }
+    val next: mut i64 = b.cap * 2
+    if next < 256 {
+        next = 256
+    }
+    if next < need {
+        next = need
+    }
+    if b.data == none {
+        b.data = mem.allocate(next) as ref u8
+    } else {
+        b.data = mem.reallocate(b.data as ref void, next) as ref u8
+    }
+    b.cap = next
+}
+
+pub fn append(b: mut ref Buf, src: ref void, n: i64) void = {
+    if n <= 0 {
+        return
+    }
+    reserve(b, b.len + n)
+    mem.mem_copy(mem.ptr(b.data as ref void, b.len), src, n)
+    b.len = b.len + n
+}
+
+pub fn append_str(b: mut ref Buf, s: ref u8) void = {
+    append(b, s as ref void, @strlen(s))
+}
+
+pub fn append_ch(b: mut ref Buf, ch: u8) void = {
+    reserve(b, b.len + 1)
+    mem.set_u8(b.data, b.len as i32, ch)
+    b.len = b.len + 1
+}
+
+pub fn append_u8(b: mut ref Buf, v: u8) void = {
+    append_ch(b, v)
+}
+
+pub fn append_u16(b: mut ref Buf, v: u16) void = {
+    append_ch(b, (v & 255) as u8)
+    append_ch(b, ((v >> 8) & 255) as u8)
+}
+
+pub fn append_u32(b: mut ref Buf, v: u32) void = {
+    append_ch(b, (v & 255) as u8)
+    append_ch(b, ((v >> 8) & 255) as u8)
+    append_ch(b, ((v >> 16) & 255) as u8)
+    append_ch(b, ((v >> 24) & 255) as u8)
+}
+
+pub fn append_i32(b: mut ref Buf, v: i32) void = {
+    append_u32(b, v as u32)
+}
+
+pub fn append_f32(b: mut ref Buf, v: f32) void = {
+    val p: mut f32 = v
+    val bytes = @addr(p) as ref void
+    append(b, bytes, 4)
+}
+
+pub fn append_f64(b: mut ref Buf, v: f64) void = {
+    val p: mut f64 = v
+    val bytes = @addr(p) as ref void
+    append(b, bytes, 8)
+}
+
+pub fn append_zeros(b: mut ref Buf, n: i64) void = {
+    val i: mut i64 = 0
+    for {
+        if i >= n {
+            break
+        }
+        append_ch(b, 0)
+        i++
+    }
+}
+
+pub fn append_pad4(b: mut ref Buf) void = {
+    for {
+        if b.len % 4 == 0 {
+            break
+        }
+        append_ch(b, 0)
+    }
+}
+
+pub fn append_fmt(b: mut ref Buf, fmt: ref u8, args: argspack) void = {
+    val tmp: mut [1024]u8 = @zeroed
+    @snprintf(@addr(tmp) as ref u8, 1024, fmt, args)
+    append_str(b, @addr(tmp) as ref u8)
+}
+
+pub fn free(b: mut ref Buf) void = {
+    if b.data != none {
+        mem.release(b.data as ref void)
+        b.data = none
+    }
+    b.len = 0
+    b.cap = 0
+}

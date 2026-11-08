@@ -1,0 +1,125 @@
+val gl    = use("../platform/gl.sx")
+val text  = use("./text.sx")
+val color = use("../core/color.sx")
+
+val screen_h: mut i32 = 0
+val screen_w: mut i32 = 0
+val clip_active: mut bool = false
+
+pub fn begin(width: i32, height: i32) void = trust {
+    screen_w = width
+    screen_h = height
+    clip_active = false
+    gl.glViewport(0, 0, width, height)
+    gl.glDisable(gl.GL_DEPTH_TEST)
+    gl.glDisable(gl.GL_CULL_FACE)
+    gl.glEnable(gl.GL_BLEND)
+    gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+    gl.glMatrixMode(gl.GL_PROJECTION)
+    gl.glLoadIdentity()
+    gl.glOrtho(0.0, width as f64, height as f64, 0.0, -1.0, 1.0)
+    gl.glMatrixMode(gl.GL_MODELVIEW)
+    gl.glLoadIdentity()
+}
+
+pub fn end() void = trust {
+    clip_off()
+    gl.glDisable(gl.GL_TEXTURE_2D)
+    gl.glDisable(gl.GL_BLEND)
+    gl.glEnable(gl.GL_DEPTH_TEST)
+}
+
+pub fn clip(x: i32, y: i32, w: i32, h: i32) void = trust {
+    gl.glEnable(gl.GL_SCISSOR_TEST)
+    gl.glScissor(x, screen_h - y - h, w, h)
+    clip_active = true
+}
+
+pub fn clip_off() void = trust {
+    if clip_active {
+        gl.glDisable(gl.GL_SCISSOR_TEST)
+        clip_active = false
+    }
+}
+
+pub fn rect(x: i32, y: i32, w: i32, h: i32, c: color.Color) void = trust {
+    gl.glDisable(gl.GL_TEXTURE_2D)
+    gl.glColor4f(c.r, c.g, c.b, c.a)
+    val fx = x as f32
+    val fy = y as f32
+    val fw = w as f32
+    val fh = h as f32
+    gl.glBegin(gl.GL_QUADS)
+    gl.glVertex2f(fx, fy)
+    gl.glVertex2f(fx + fw, fy)
+    gl.glVertex2f(fx + fw, fy + fh)
+    gl.glVertex2f(fx, fy + fh)
+    gl.glEnd()
+}
+
+pub fn rect_outline(x: i32, y: i32, w: i32, h: i32, thickness: i32, c: color.Color) void = trust {
+    rect(x, y, w, thickness, c)
+    rect(x, y + h - thickness, w, thickness, c)
+    rect(x, y, thickness, h, c)
+    rect(x + w - thickness, y, thickness, h, c)
+}
+
+pub fn line(x0: i32, y0: i32, x1: i32, y1: i32, thickness: i32, c: color.Color) void = trust {
+    gl.glDisable(gl.GL_TEXTURE_2D)
+    gl.glColor4f(c.r, c.g, c.b, c.a)
+    gl.glLineWidth(thickness as f32)
+    gl.glBegin(gl.GL_LINES)
+    gl.glVertex2f(x0 as f32, y0 as f32)
+    gl.glVertex2f(x1 as f32, y1 as f32)
+    gl.glEnd()
+    gl.glLineWidth(1.0)
+}
+
+pub fn image(tex: u32, x: i32, y: i32, w: i32, h: i32, tint: color.Color) void = trust {
+    if tex == 0 {
+        return
+    }
+    gl.glEnable(gl.GL_TEXTURE_2D)
+    gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
+    gl.glColor4f(tint.r, tint.g, tint.b, tint.a)
+    val fx = x as f32
+    val fy = y as f32
+    val fw = w as f32
+    val fh = h as f32
+    gl.glBegin(gl.GL_QUADS)
+    gl.glTexCoord2f(0.0, 0.0)
+    gl.glVertex2f(fx, fy)
+    gl.glTexCoord2f(1.0, 0.0)
+    gl.glVertex2f(fx + fw, fy)
+    gl.glTexCoord2f(1.0, 1.0)
+    gl.glVertex2f(fx + fw, fy + fh)
+    gl.glTexCoord2f(0.0, 1.0)
+    gl.glVertex2f(fx, fy + fh)
+    gl.glEnd()
+}
+
+pub fn text_draw(size: i32, x: i32, y: i32, s: ref u8, c: color.Color) void = trust {
+    text.draw(size, x, y, s, c)
+}
+
+pub fn text_centered(size: i32, cx: i32, y: i32, s: ref u8, c: color.Color) void = trust {
+    val w = text.width(size, s)
+    text.draw(size, cx - w / 2, y, s, c)
+}
+
+pub fn text_right(size: i32, rx: i32, y: i32, s: ref u8, c: color.Color) void = trust {
+    val w = text.width(size, s)
+    text.draw(size, rx - w, y, s, c)
+}
+
+pub fn text_width(size: i32, s: ref u8) i32 = trust {
+    return text.width(size, s)
+}
+
+pub fn screen_width() i32 = trust {
+    return screen_w
+}
+
+pub fn screen_height() i32 = trust {
+    return screen_h
+}

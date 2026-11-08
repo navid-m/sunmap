@@ -1,0 +1,10 @@
+SPECTRE_LANGUAGE_REFERENCE.md
+lib/
+std__*
+s-out/
+docs-out*/
+sunmap
+sunmap-dev
+sunmap-dev-*
+exports/
+projects/

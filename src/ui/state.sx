@@ -1,0 +1,113 @@
+val math  = use("../core/math.sx")
+val mem   = use("../core/mem.sx")
+val c     = use("../core/constants.sx")
+val brush = use("../map/brush.sx")
+
+pub type UIState = {
+    mode: mut i32
+    grid: mut f64
+    wall: mut f64
+    height: mut f64
+    active_tex: mut i32
+    status: [160]u8
+    status_time: mut f64
+    editing_name: mut bool
+    hover_brush: mut i32
+    hover_face: mut i32
+    face_brush: mut i32
+    face_index: mut i32
+    drag_kind: mut i32
+    drag_moved: mut bool
+    drag_start_x: mut i32
+    drag_start_y: mut i32
+    drag_brush: mut i32
+    drag_face: mut i32
+    drag_vert: mut i32
+    drag_start_world: mut math.Vec3
+    drag_last_world: mut math.Vec3
+    drag_vert_pos: mut math.Vec3
+    drag_face_dist: mut f64
+    drag_limit: mut f64
+    drag_target: mut f64
+    drag_last_delta: mut math.Vec3
+    drag_orig: [32]f64
+    drag_orig_count: mut i32
+    preview: mut brush.Brush
+    preview_valid: mut bool
+    texture_scroll: mut f64
+    help_visible: mut bool
+    export_flash: mut f64
+}
+
+pub fn create() ref UIState = {
+    val raw = mem.allocate(@sizeof(UIState) as i64)
+    val ui: mut ref UIState = raw as ref UIState
+    mem.zero(ui as ref void, @sizeof(UIState) as i64)
+    ui.mode = c.MODE_BRUSH
+    ui.grid = c.DEFAULT_GRID
+    ui.wall = c.DEFAULT_WALL
+    ui.height = c.DEFAULT_HEIGHT
+    ui.active_tex = 0
+    ui.hover_brush = -1
+    ui.hover_face = -1
+    ui.face_brush = -1
+    ui.face_index = -1
+    ui.drag_kind = c.DRAG_NONE
+    ui.drag_brush = -1
+    ui.drag_face = -1
+    ui.drag_vert = -1
+    ui.drag_last_delta = math.v3(0.0, 0.0, 0.0)
+    ui.status_time = 0.0
+    ui.editing_name = false
+    ui.help_visible = true
+    mem.zero(@addr(ui.preview) as ref void, @sizeof(brush.Brush) as i64)
+    brush.init(@addr(ui.preview))
+    set_status(ui, "Drop .png/.tga textures onto the window to add them.", {})
+    return ui
+}
+
+pub fn destroy(ui: mut ref UIState) void = {
+    brush.dispose(@addr(ui.preview))
+    mem.release(ui as ref void)
+}
+
+pub fn set_status(ui: mut ref UIState, fmt: ref u8, args: argspack) void = {
+    @snprintf(@addr(ui.status) as ref u8, 160, fmt, args)
+    ui.status_time = 4.5
+}
+
+pub fn status(ui: mut ref UIState) ref u8 = {
+    return @addr(ui.status) as ref u8
+}
+
+pub fn mode_name(mode: i32) ref u8 = {
+    if mode == c.MODE_FACE {
+        return "Face"
+    }
+    if mode == c.MODE_VERTEX {
+        return "Vertex"
+    }
+    return "Brush"
+}
+
+pub fn cancel_drag(ui: mut ref UIState) void = {
+    ui.drag_kind = c.DRAG_NONE
+    ui.drag_moved = false
+    ui.drag_brush = -1
+    ui.drag_face = -1
+    ui.drag_vert = -1
+    ui.preview_valid = false
+}
+
+pub fn save_original(ui: mut ref UIState, b: mut ref brush.Brush) void = {
+    ui.drag_orig_count = b.face_count
+    val i: mut i32 = 0
+    for {
+        if i >= b.face_count {
+            break
+        }
+        val f = brush.face(b, i)
+        mem.set_f64(@addr(ui.drag_orig) as ref void, i, f.dist)
+        i++
+    }
+}

@@ -1,0 +1,224 @@
+val sdl   = use("../platform/sdl.sx")
+val gl    = use("../platform/gl.sx")
+val mem   = use("../core/mem.sx")
+val str   = use("../core/strutil.sx")
+val fs    = use("std/fs")
+val stdio = use("std/stdio")
+
+pub type Texture = {
+    name: mut ref u8
+    path: mut ref u8
+    width: mut i32
+    height: mut i32
+    gl: mut u32
+    live: mut bool
+}
+
+pub fn empty() Texture = {
+    return Texture{name: "", path: "", width: 0, height: 0, gl: 0, live: false}
+}
+
+pub fn load_file(path: ref u8) Texture = trust {
+    val surf = sdl.IMG_Load(path)
+    if surf == none {
+        stdio.eputs("sunmap: could not load image")
+        stdio.eputs(path)
+        stdio.eputs(sdl.SDL_GetError())
+        return empty()
+    }
+    val rgba = sdl.SDL_ConvertSurfaceFormat(surf, sdl.SDL_PIXELFORMAT_ABGR8888, 0)
+    sdl.SDL_FreeSurface(surf)
+    if rgba == none {
+        stdio.eputs("sunmap: image conversion failed")
+        stdio.eputs(path)
+        return empty()
+    }
+    val s = rgba as ref sdl.SdlSurface
+    val tex: mut u32 = 0
+    gl.glGenTextures(1, @addr(tex))
+    gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
+    gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+    gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, s.pitch / 4)
+    gl.glTexImage2D(
+        gl.GL_TEXTURE_2D,
+        0,
+        gl.GL_RGBA as i32,
+        s.w,
+        s.h,
+        0,
+        gl.GL_RGBA,
+        gl.GL_UNSIGNED_BYTE,
+        s.pixels as ref void
+    )
+    gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
+    sdl.SDL_FreeSurface(rgba)
+
+    return Texture{
+        name: str.stem(path)
+        path: str.dup(path)
+        width: s.w
+        height: s.h
+        gl: tex
+        live: true
+    }
+}
+
+pub fn free(t: mut ref Texture) void = trust {
+    if t.gl != 0 {
+        val id: mut u32 = t.gl
+        gl.glDeleteTextures(1, @addr(id))
+        t.gl = 0
+    }
+    if t.name != none {
+        mem.release(t.name as ref void)
+        t.name = none
+    }
+    if t.path != none {
+        mem.release(t.path as ref void)
+        t.path = none
+    }
+    t.live = false
+}
+
+fn file_exists(path: ref u8) bool = trust {
+    val sz = fs.file_size(path)
+    match sz {
+        some _ => {
+            return true
+        }
+        none => {
+            return false
+        }
+    }
+}
+
+fn copy_file(src: ref u8, dst: ref u8) bool = trust {
+    val sz = fs.file_size(src)
+    val data = fs.read_all_raw(src)
+    match data {
+        some bytes => {
+            val len: mut i64 = 0
+            match sz {
+                some n => {
+                    len = n
+                }
+                none => {
+                    len = 0
+                }
+            }
+            val wrote = fs.write_all_bytes(dst, bytes as ref void, len)
+            mem.release(bytes as ref void)
+            return wrote
+        }
+        none => {
+            return false
+        }
+    }
+}
+
+/// Copy an image into the local textures folder and load it.
+pub fn import_file(src: ref u8, dir: ref u8) Texture = trust {
+    fs.mkdir_path(dir)
+
+    val base = str.basename(src)
+    val stem = str.stem(base)
+    val ext = str.extension(base)
+    val safe_stem: mut [128]u8 = @zeroed
+    str.sanitize(@addr(safe_stem) as ref u8, 128, stem)
+    val safe_base: mut [192]u8 = @zeroed
+    @snprintf(@addr(safe_base) as ref u8, 192, "{s}{s}", {@addr(safe_stem) as ref u8, ext})
+    val dest: mut [512]u8 = @zeroed
+    val dp = @addr(dest) as ref u8
+    @snprintf(dp, 512, "{s}/{s}", {dir, @addr(safe_base) as ref u8})
+
+    if !str.eql(src, dp) {
+        if file_exists(dp) {
+            val n: mut i32 = 1
+            for {
+                if n > 100 {
+                    break
+                }
+                @snprintf(dp, 512, "{s}/{s}_{d}{s}", {dir, @addr(safe_stem) as ref u8, n, ext})
+                if !file_exists(dp) {
+                    break
+                }
+                n++
+            }
+        }
+        if !copy_file(src, dp) {
+            stdio.eputs("sunmap: could not copy texture")
+            stdio.eputs(src)
+            return empty()
+        }
+    }
+    return load_file(dp)
+}
+
+pub fn save_png(src: ref u8, dst: ref u8) bool = trust {
+    val surf = sdl.IMG_Load(src)
+    if surf == none {
+        return false
+    }
+    val r = sdl.IMG_SavePNG(surf, dst)
+    sdl.SDL_FreeSurface(surf)
+    return r == 0
+}
+
+/// A small procedural checker used for brushes that have no texture.
+pub fn make_default() Texture = trust {
+    val size = 64
+    val bytes = mem.allocate(64 * 64 * 4)
+    val i: mut i32 = 0
+    for {
+        if i >= 64 * 64 {
+            break
+        }
+        val x = i % 64
+        val y = i / 64
+        val checker = ((x / 16) + (y / 16)) % 2
+        val base: mut i32 = 66
+        if checker == 0 {
+            base = 78
+        }
+        if x % 16 == 0 || y % 16 == 0 {
+            base = base - 12
+        }
+        mem.set_u8(bytes, i * 4 + 0, base as u8)
+        mem.set_u8(bytes, i * 4 + 1, (base + 3) as u8)
+        mem.set_u8(bytes, i * 4 + 2, (base + 8) as u8)
+        mem.set_u8(bytes, i * 4 + 3, 255)
+        i++
+    }
+    val tex: mut u32 = 0
+    gl.glGenTextures(1, @addr(tex))
+    gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_REPEAT)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_REPEAT)
+    gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+    gl.glTexImage2D(
+        gl.GL_TEXTURE_2D,
+        0,
+        gl.GL_RGBA as i32,
+        64,
+        64,
+        0,
+        gl.GL_RGBA,
+        gl.GL_UNSIGNED_BYTE,
+        bytes
+    )
+    mem.release(bytes)
+    return Texture{
+        name: str.dup("default")
+        path: str.dup("")
+        width: size
+        height: size
+        gl: tex
+        live: true
+    }
+}

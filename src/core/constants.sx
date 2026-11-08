@@ -1,0 +1,25 @@
+pub val MAX_BRUSHES: i32 = 1024
+pub val MAX_FACES: i32 = 32
+pub val MAX_VERTS: i32 = 192
+pub val MAX_TEXTURES: i32 = 256
+
+pub val MODE_BRUSH: i32 = 0
+pub val MODE_FACE: i32 = 1
+pub val MODE_VERTEX: i32 = 2
+
+pub val DRAG_NONE: i32 = 0
+pub val DRAG_DRAW: i32 = 1
+pub val DRAG_MOVE: i32 = 2
+pub val DRAG_FACE: i32 = 3
+pub val DRAG_VERTEX: i32 = 4
+pub val DRAG_LOOK: i32 = 5
+pub val DRAG_PAN: i32 = 6
+
+pub val TOP_BAR_H: i32 = 52
+pub val LEFT_PANEL_W: i32 = 248
+pub val RIGHT_PANEL_W: i32 = 276
+pub val BOTTOM_BAR_H: i32 = 30
+
+pub val DEFAULT_GRID: f64 = 16.0
+pub val DEFAULT_WALL: f64 = 16.0
+pub val DEFAULT_HEIGHT: f64 = 96.0

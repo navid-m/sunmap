@@ -1,0 +1,87 @@
+val sdl   = use("./sdl.sx")
+val gl    = use("./gl.sx")
+val stdio = use("std/stdio")
+
+pub type Window = {
+    handle: ref void
+    context: ref void
+    width: mut i32
+    height: mut i32
+}
+
+pub fn create(title: ref u8, width: i32, height: i32) Window = trust {
+    if sdl.SDL_Init(sdl.SDL_INIT_VIDEO | sdl.SDL_INIT_EVENTS) != 0 {
+        stdio.eputs("sunmap: SDL_Init failed")
+        stdio.eputs(sdl.SDL_GetError())
+        return Window{handle: none, context: none, width: 0, height: 0}
+    }
+
+    sdl.SDL_GL_SetAttribute(sdl.SDL_GL_DOUBLEBUFFER, 1)
+    sdl.SDL_GL_SetAttribute(sdl.SDL_GL_DEPTH_SIZE, 24)
+    sdl.SDL_GL_SetAttribute(sdl.SDL_GL_MULTISAMPLEBUFFERS, 1)
+    sdl.SDL_GL_SetAttribute(sdl.SDL_GL_MULTISAMPLESAMPLES, 4)
+
+    val flags = sdl.SDL_WINDOW_OPENGL | sdl.SDL_WINDOW_SHOWN | sdl.SDL_WINDOW_RESIZABLE
+    val handle = sdl.SDL_CreateWindow(title, 80, 80, width, height, flags)
+    if handle == none {
+        stdio.eputs("sunmap: could not create window")
+        stdio.eputs(sdl.SDL_GetError())
+        return Window{handle: none, context: none, width: 0, height: 0}
+    }
+    sdl.SDL_SetWindowMinimumSize(handle, 960, 600)
+
+    val context = sdl.SDL_GL_CreateContext(handle)
+    if context == none {
+        stdio.eputs("sunmap: could not create OpenGL context")
+        stdio.eputs(sdl.SDL_GetError())
+        sdl.SDL_DestroyWindow(handle)
+        return Window{handle: none, context: none, width: 0, height: 0}
+    }
+    sdl.SDL_GL_SetSwapInterval(1)
+    sdl.SDL_StartTextInput()
+
+    return Window{handle: handle, context: context, width: width, height: height}
+}
+
+pub fn destroy(win: Window) void = trust {
+    if win.context != none {
+        sdl.SDL_GL_DeleteContext(win.context)
+    }
+    if win.handle != none {
+        sdl.SDL_DestroyWindow(win.handle)
+    }
+    sdl.SDL_StopTextInput()
+    sdl.SDL_Quit()
+}
+
+pub fn resize(win: mut ref Window) void = trust {
+    val w: mut i32 = win.width
+    val h: mut i32 = win.height
+    sdl.SDL_GetWindowSize(win.handle, @addr(w), @addr(h))
+    win.width = w
+    win.height = h
+}
+
+pub fn base_path() ref u8 = trust {
+    val p = sdl.SDL_GetBasePath()
+    if p == none {
+        return ""
+    }
+    return p
+}
+
+pub fn set_title(win: Window, title: ref u8) void = trust {
+    sdl.SDL_SetWindowTitle(win.handle, title)
+}
+
+pub fn swap(win: Window) void = trust {
+    sdl.SDL_GL_SwapWindow(win.handle)
+}
+
+pub fn gl_string(name: u32) ref u8 = trust {
+    val p = gl.glGetString(name)
+    if p == none {
+        return ""
+    }
+    return p
+}

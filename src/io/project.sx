@@ -1,0 +1,217 @@
+val buf     = use("./buffer.sx")
+val world   = use("../map/world.sx")
+val brush   = use("../map/brush.sx")
+val csg     = use("../map/csg.sx")
+val texture = use("../map/texture.sx")
+val camera  = use("../render/camera.sx")
+val uistate = use("../ui/state.sx")
+val str     = use("../core/strutil.sx")
+val math    = use("../core/math.sx")
+val fs      = use("std/fs")
+
+fn project_path(w: mut ref world.World, dst: ref u8, cap: i32) void = {
+    val safe: mut [64]u8 = @zeroed
+    str.sanitize(@addr(safe) as ref u8, 64, world.name(w))
+    @snprintf(dst, cap, "projects/{s}.sm", {@addr(safe) as ref u8})
+}
+
+pub fn save(w: mut ref world.World, cam: ref camera.Camera, ui: ref uistate.UIState) bool = trust {
+    fs.mkdir_path("projects")
+    val path: mut [512]u8 = @zeroed
+    project_path(w, @addr(path) as ref u8, 512)
+
+    val out: mut buf.Buf = buf.create()
+    val tmp: mut [1024]u8 = @zeroed
+    buf.append_str(@addr(out), "sunmap 1\n")
+    val safe: mut [64]u8 = @zeroed
+    str.sanitize(@addr(safe) as ref u8, 64, world.name(w))
+    buf.append_fmt(@addr(out), "name {s}\n", {@addr(safe) as ref u8})
+    @snprintf(
+        @addr(tmp) as ref u8,
+        1024,
+        "camera {f} {f} {f} {f} {f}\n",
+        {cam.pos.x, cam.pos.y, cam.pos.z, cam.yaw, cam.pitch}
+    )
+    buf.append_str(@addr(out), @addr(tmp) as ref u8)
+    @snprintf(
+        @addr(tmp) as ref u8,
+        1024,
+        "grid {f}\nwall {f}\nheight {f}\n",
+        {ui.grid, ui.wall, ui.height}
+    )
+    buf.append_str(@addr(out), @addr(tmp) as ref u8)
+
+    val i: mut i32 = 0
+    for {
+        if i >= w.texture_count {
+            break
+        }
+        val t = world.texture_at(w, i)
+        val tn: mut [128]u8 = @zeroed
+        str.sanitize(@addr(tn) as ref u8, 128, t.name)
+        val pathbuf: mut [512]u8 = @zeroed
+        if t.path != none && @strlen(t.path) > 0 {
+            str.copy(@addr(pathbuf) as ref u8, 512, t.path)
+        } else {
+            str.copy(@addr(pathbuf) as ref u8, 512, "-")
+        }
+        buf.append_fmt(
+            @addr(out),
+            "texture {s} {s}\n",
+            {@addr(tn) as ref u8, @addr(pathbuf) as ref u8}
+        )
+        i++
+    }
+
+    i = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = world.brush_at(w, i)
+        buf.append_fmt(@addr(out), "brush {d} {d}\n", {b.tex, b.face_count})
+        val fi: mut i32 = 0
+        for {
+            if fi >= b.face_count {
+                break
+            }
+            val f = brush.face(b, fi)
+            @snprintf(
+                @addr(tmp) as ref u8,
+                1024,
+                "p {f} {f} {f} {f}\n",
+                {f.normal.x, f.normal.y, f.normal.z, f.dist}
+            )
+            buf.append_str(@addr(out), @addr(tmp) as ref u8)
+            fi++
+        }
+        buf.append_str(@addr(out), "end\n")
+        i++
+    }
+
+    val wrote = fs.write_all_bytes(@addr(path) as ref u8, out.data as ref void, out.len)
+    buf.free(@addr(out))
+    return wrote
+}
+
+pub fn load(
+    w: mut ref world.World,
+    cam: mut ref camera.Camera,
+    ui: mut ref uistate.UIState
+) bool = trust {
+    val path: mut [512]u8 = @zeroed
+    project_path(w, @addr(path) as ref u8, 512)
+    val sz = fs.file_size(@addr(path) as ref u8)
+    val size: mut i64 = 0
+    match sz {
+        some n => {
+            size = n
+        }
+        none => {
+            return false
+        }
+    }
+    val data = fs.read_all_raw(@addr(path) as ref u8)
+    val bytes: mut ref u8 = none
+    match data {
+        some b => {
+            bytes = b
+        }
+        none => {
+            return false
+        }
+    }
+
+    world.clear_all(w)
+    uistate.cancel_drag(ui)
+    ui.face_brush = -1
+    ui.face_index = -1
+
+    val s: mut str.Scanner = str.scanner(bytes)
+    val tok: mut [256]u8 = @zeroed
+    val tp = @addr(tok) as ref u8
+    val pending_brush: mut ref brush.Brush = none
+    val pending_faces: mut i32 = 0
+    val pending_read: mut i32 = 0
+    val pending_tex: mut i32 = 0
+
+    for {
+        if !str.scan_token(@addr(s), tp, 256) {
+            break
+        }
+        if str.token_eql(tp, "name") {
+            if str.scan_token(@addr(s), tp, 256) {
+                val safe: mut [64]u8 = @zeroed
+                str.sanitize(@addr(safe) as ref u8, 64, tp)
+                world.copy_name(w, @addr(safe) as ref u8)
+            }
+        } elif str.token_eql(tp, "camera") {
+            cam.pos.x = str.scan_f64(@addr(s), 0.0)
+            cam.pos.y = str.scan_f64(@addr(s), 0.0)
+            cam.pos.z = str.scan_f64(@addr(s), 0.0)
+            cam.yaw = str.scan_f64(@addr(s), 0.0)
+            cam.pitch = str.scan_f64(@addr(s), 0.0)
+        } elif str.token_eql(tp, "grid") {
+            ui.grid = str.scan_f64(@addr(s), 16.0)
+        } elif str.token_eql(tp, "wall") {
+            ui.wall = str.scan_f64(@addr(s), 16.0)
+        } elif str.token_eql(tp, "height") {
+            ui.height = str.scan_f64(@addr(s), 96.0)
+        } elif str.token_eql(tp, "texture") {
+            val namebuf: mut [256]u8 = @zeroed
+            val pathbuf: mut [512]u8 = @zeroed
+            if str.scan_token(@addr(s), @addr(namebuf) as ref u8, 256) {
+                if str.scan_token(@addr(s), @addr(pathbuf) as ref u8, 512) {
+                    if str.eql(@addr(pathbuf) as ref u8, "-") {
+                        val t = texture.make_default()
+                        world.add_texture(w, t)
+                    } else {
+                        val t = texture.load_file(@addr(pathbuf) as ref u8)
+                        if t.live {
+                            world.add_texture(w, t)
+                        } else {
+                            val fallback = texture.make_default()
+                            world.add_texture(w, fallback)
+                        }
+                    }
+                }
+            }
+        } elif str.token_eql(tp, "brush") {
+            pending_tex = str.scan_i32(@addr(s), 0)
+            pending_faces = str.scan_i32(@addr(s), 0)
+            pending_brush = csg.new_brush()
+            pending_read = 0
+        } elif str.token_eql(tp, "p") {
+            if pending_brush != none {
+                val nx = str.scan_f64(@addr(s), 0.0)
+                val ny = str.scan_f64(@addr(s), 0.0)
+                val nz = str.scan_f64(@addr(s), 0.0)
+                val d = str.scan_f64(@addr(s), 0.0)
+                brush.add_plane(pending_brush, math.v3(nx, ny, nz), d)
+                pending_read++
+            }
+        } elif str.token_eql(tp, "end") {
+            if pending_brush != none {
+                brush.rebuild(pending_brush)
+                if pending_brush.valid {
+                    pending_brush.tex = pending_tex
+                    pending_brush.selected = false
+                    world.add_brush(w, pending_brush)
+                } else {
+                    csg.free_brush(pending_brush)
+                }
+                pending_brush = none
+            }
+        }
+    }
+
+    if pending_brush != none {
+        csg.free_brush(pending_brush)
+    }
+    if w.texture_count == 0 {
+        val t = texture.make_default()
+        world.add_texture(w, t)
+    }
+    ui.active_tex = 0
+    return true
+}

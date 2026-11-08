@@ -1,0 +1,85 @@
+val color = use("../core/color.sx")
+
+pub fn BG() color.Color = {
+    return color.color(0.068, 0.076, 0.092, 1.0)
+}
+
+pub fn VIEW_BG() color.Color = {
+    return color.color(0.094, 0.104, 0.122, 1.0)
+}
+
+pub fn PANEL() color.Color = {
+    return color.color(0.106, 0.117, 0.138, 1.0)
+}
+
+pub fn PANEL_2() color.Color = {
+    return color.color(0.128, 0.142, 0.168, 1.0)
+}
+
+pub fn PANEL_HOVER() color.Color = {
+    return color.color(0.158, 0.174, 0.205, 1.0)
+}
+
+pub fn BORDER() color.Color = {
+    return color.color(0.192, 0.212, 0.248, 1.0)
+}
+
+pub fn BORDER_SOFT() color.Color = {
+    return color.color(0.150, 0.166, 0.196, 1.0)
+}
+
+pub fn TEXT() color.Color = {
+    return color.color(0.850, 0.878, 0.920, 1.0)
+}
+
+pub fn MUTED() color.Color = {
+    return color.color(0.520, 0.560, 0.630, 1.0)
+}
+
+pub fn DIM() color.Color = {
+    return color.color(0.380, 0.412, 0.470, 1.0)
+}
+
+pub fn ACCENT() color.Color = {
+    return color.color(0.940, 0.620, 0.300, 1.0)
+}
+
+pub fn ACCENT_DIM() color.Color = {
+    return color.color(0.560, 0.360, 0.180, 1.0)
+}
+
+pub fn SELECT() color.Color = {
+    return color.color(1.000, 0.610, 0.230, 1.0)
+}
+
+pub fn GREEN() color.Color = {
+    return color.color(0.420, 0.780, 0.560, 1.0)
+}
+
+pub fn RED() color.Color = {
+    return color.color(0.900, 0.400, 0.400, 1.0)
+}
+
+pub fn WHITE() color.Color = {
+    return color.color(1.0, 1.0, 1.0, 1.0)
+}
+
+pub fn BLACK() color.Color = {
+    return color.color(0.0, 0.0, 0.0, 1.0)
+}
+
+pub fn GRID_MINOR() color.Color = {
+    return color.color(0.190, 0.210, 0.245, 0.65)
+}
+
+pub fn GRID_MAJOR() color.Color = {
+    return color.color(0.290, 0.320, 0.380, 0.90)
+}
+
+pub fn GRID_AXIS_X() color.Color = {
+    return color.color(0.560, 0.290, 0.290, 0.95)
+}
+
+pub fn GRID_AXIS_Y() color.Color = {
+    return color.color(0.300, 0.490, 0.330, 0.95)
+}

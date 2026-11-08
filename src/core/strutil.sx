@@ -1,0 +1,226 @@
+val mem = use("./mem.sx")
+
+extern (C, header) fn atof(s: ref u8) f64 = "atof"
+extern (C, header) fn atoi(s: ref u8) i32 = "atoi"
+
+pub fn len(s: ref u8) i64 = {
+    return @strlen(s)
+}
+
+pub fn eql(a: ref u8, b: ref u8) bool = {
+    return @strcmp(a, b) == 0
+}
+
+pub fn copy(dst: ref u8, cap: i32, src: ref u8) void = {
+    val n = len(src)
+    val max = (cap - 1) as i64
+    val count: mut i64 = n
+    if count > max {
+        count = max
+    }
+    val i: mut i64 = 0
+    for {
+        if i >= count {
+            break
+        }
+        mem.set_u8(dst, i as i32, mem.u8_at(src, i as i32))
+        i++
+    }
+    mem.set_u8(dst, count as i32, 0)
+}
+
+pub fn append(dst: ref u8, cap: i32, src: ref u8) void = {
+    val have = len(dst)
+    if have >= (cap - 1) as i64 {
+        return
+    }
+    copy(trust @ptradd(dst, have) as ref u8, cap - have as i32, src)
+}
+
+pub fn append_char(dst: ref u8, cap: i32, c: u8) void = {
+    val have = len(dst)
+    if have >= (cap - 1) as i64 {
+        return
+    }
+    mem.set_u8(dst, have as i32, c)
+    mem.set_u8(dst, have as i32 + 1, 0)
+}
+
+pub fn basename(path: ref u8) ref u8 = {
+    val n = len(path)
+    val last: mut i64 = 0
+    val i: mut i64 = 0
+    for {
+        if i >= n {
+            break
+        }
+        val c = mem.u8_at(path, i as i32)
+        if c == 47 || c == 92 {
+            last = i + 1
+        }
+        i++
+    }
+    return trust @ptradd(path, last) as ref u8
+}
+
+pub fn extension(path: ref u8) ref u8 = {
+    val name = basename(path)
+    val n = len(name)
+    val dot: mut i64 = -1
+    val i: mut i64 = 0
+    for {
+        if i >= n {
+            break
+        }
+        if mem.u8_at(name, i as i32) == 46 {
+            dot = i
+        }
+        i++
+    }
+    if dot < 0 {
+        return trust @ptradd(name, n) as ref u8
+    }
+    return trust @ptradd(name, dot) as ref u8
+}
+
+pub fn is_image(path: ref u8) bool = {
+    val ext = extension(path)
+    if eql(ext, ".png") || eql(ext, ".PNG") {
+        return true
+    }
+    if eql(ext, ".tga") || eql(ext, ".TGA") {
+        return true
+    }
+    if eql(ext, ".jpg") || eql(ext, ".JPG") || eql(ext, ".jpeg") || eql(ext, ".JPEG") {
+        return true
+    }
+    if eql(ext, ".bmp") || eql(ext, ".BMP") {
+        return true
+    }
+    return false
+}
+
+pub fn sanitize(dst: ref u8, cap: i32, src: ref u8) void = {
+    mem.set_u8(dst, 0, 0)
+    val n = len(src)
+    val i: mut i64 = 0
+    for {
+        if i >= n {
+            break
+        }
+        val ch = mem.u8_at(src, i as i32)
+        val out: mut u8 = 95
+        if ch >= 48 && ch <= 57 {
+            out = ch
+        } elif ch >= 65 && ch <= 90 {
+            out = ch
+        } elif ch >= 97 && ch <= 122 {
+            out = ch
+        } elif ch == 45 {
+            out = 45
+        } elif ch == 95 {
+            out = 95
+        }
+        append_char(dst, cap, out)
+        i++
+    }
+    if len(dst) == 0 {
+        copy(dst, cap, "untitled")
+    }
+}
+
+/// Strip the extension from a file name, returning a newly allocated string.
+pub fn stem(path: ref u8) ref u8 = {
+    val name = basename(path)
+    val ext = extension(path)
+    val skip = (ext as usize) - (name as usize)
+    val total: i64 = @strlen(name)
+    val count: mut i64 = total
+    if skip >= 0 && skip < total {
+        count = skip
+    }
+    val out = @alloc((count + 1) as usize) as ref u8
+    val i: mut i64 = 0
+    for {
+        if i >= count {
+            break
+        }
+        mem.set_u8(out, i as i32, mem.u8_at(name, i as i32))
+        i++
+    }
+    mem.set_u8(out, count as i32, 0)
+    return out
+}
+
+pub type Scanner = {
+    data: ref u8
+    length: i64
+    pos: mut i64
+}
+
+pub fn scanner(data: ref u8) Scanner = {
+    return Scanner{data: data, length: len(data), pos: 0}
+}
+
+pub fn scan_token(s: mut ref Scanner, out: ref u8, cap: i32) bool = {
+    for {
+        if s.pos >= s.length {
+            break
+        }
+        val c = mem.u8_at(s.data, s.pos as i32)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            s.pos++
+        } else {
+            break
+        }
+    }
+    if s.pos >= s.length {
+        mem.set_u8(out, 0, 0)
+        return false
+    }
+    val written: mut i32 = 0
+    for {
+        if s.pos >= s.length {
+            break
+        }
+        val c = mem.u8_at(s.data, s.pos as i32)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            break
+        }
+        if written < cap - 1 {
+            mem.set_u8(out, written, c)
+            written++
+        }
+        s.pos++
+    }
+    mem.set_u8(out, written, 0)
+    return true
+}
+
+pub fn scan_i32(s: mut ref Scanner, fallback: i32) i32 = {
+    val buf: mut [64]u8 = @zeroed
+    if scan_token(s, @addr(buf) as ref u8, 64) {
+        return trust atoi(@addr(buf) as ref u8)
+    }
+    return fallback
+}
+
+pub fn scan_f64(s: mut ref Scanner, fallback: f64) f64 = {
+    val buf: mut [64]u8 = @zeroed
+    if scan_token(s, @addr(buf) as ref u8, 64) {
+        return trust atof(@addr(buf) as ref u8)
+    }
+    return fallback
+}
+
+pub fn token_eql(a: ref u8, b: ref u8) bool = {
+    return eql(a, b)
+}
+
+/// Copy a NUL-terminated string into a fresh heap allocation.
+pub fn dup(s: ref u8) ref u8 = {
+    val n = len(s)
+    val out = @alloc((n + 1) as usize) as ref u8
+    copy(out, (n + 1) as i32, s)
+    return out
+}

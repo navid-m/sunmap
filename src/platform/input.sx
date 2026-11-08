@@ -1,0 +1,131 @@
+val sdl = use("./sdl.sx")
+val mem = use("../core/mem.sx")
+
+pub val KEY_NONE: i32 = 0
+pub val KEY_ESC: i32 = 27
+pub val KEY_RETURN: i32 = 13
+pub val KEY_BACKSPACE: i32 = 8
+pub val KEY_DELETE: i32 = 127
+pub val KEY_TAB: i32 = 9
+pub val KEY_SPACE: i32 = 32
+
+pub val KEY_1: i32 = 49
+pub val KEY_2: i32 = 50
+pub val KEY_3: i32 = 51
+pub val KEY_V: i32 = 118
+pub val KEY_B: i32 = 98
+pub val KEY_F: i32 = 102
+pub val KEY_H: i32 = 104
+pub val KEY_S: i32 = 115
+pub val KEY_O: i32 = 111
+pub val KEY_E: i32 = 101
+pub val KEY_C: i32 = 99
+pub val KEY_X: i32 = 120
+pub val KEY_M: i32 = 109
+pub val KEY_G: i32 = 103
+pub val KEY_R: i32 = 114
+pub val KEY_T: i32 = 116
+
+pub val KEY_LEFT: i32 = 1073741904
+pub val KEY_RIGHT: i32 = 1073741903
+pub val KEY_DOWN: i32 = 1073741905
+pub val KEY_UP: i32 = 1073741906
+pub val KEY_PAGEUP: i32 = 1073741899
+pub val KEY_PAGEDOWN: i32 = 1073741902
+pub val KEY_HOME: i32 = 1073741898
+pub val KEY_END: i32 = 1073741901
+pub val KEY_F1: i32 = 1073741882
+
+pub val SCAN_W: u8 = 26
+pub val SCAN_A: u8 = 4
+pub val SCAN_S: u8 = 22
+pub val SCAN_D: u8 = 7
+pub val SCAN_Q: u8 = 20
+pub val SCAN_E: u8 = 8
+pub val SCAN_SPACE: u8 = 44
+pub val SCAN_LSHIFT: u8 = 225
+pub val SCAN_RSHIFT: u8 = 229
+pub val SCAN_LCTRL: u8 = 224
+pub val SCAN_RCTRL: u8 = 228
+pub val SCAN_LALT: u8 = 226
+pub val SCAN_RALT: u8 = 230
+
+pub type Input = {
+    mx: mut i32
+    my: mut i32
+    dx: mut i32
+    dy: mut i32
+    wheel: mut i32
+    left: mut bool
+    right: mut bool
+    middle: mut bool
+    shift: mut bool
+    ctrl: mut bool
+    alt: mut bool
+    clicked_left: mut bool
+    released_left: mut bool
+    clicked_right: mut bool
+    released_right: mut bool
+    scroll: mut i32
+    text: [32]u8
+    text_len: mut i32
+    has_text: mut bool
+}
+
+pub fn new_input() Input = {
+    return Input{
+        mx: 0, my: 0, dx: 0, dy: 0, wheel: 0
+        left: false, right: false, middle: false
+        shift: false, ctrl: false, alt: false
+        clicked_left: false, released_left: false
+        clicked_right: false, released_right: false
+        scroll: 0
+        text: @zeroed, text_len: 0, has_text: false
+    }
+}
+
+pub fn begin_frame(input: mut ref Input) void = trust {
+    input.dx = 0
+    input.dy = 0
+    input.scroll = 0
+    input.has_text = false
+    input.text_len = 0
+    val n: mut i32 = 0
+    val keys = sdl.SDL_GetKeyboardState(@addr(n))
+    input.shift = key_at(keys, SCAN_LSHIFT) != 0 || key_at(keys, SCAN_RSHIFT) != 0
+    input.ctrl = key_at(keys, SCAN_LCTRL) != 0 || key_at(keys, SCAN_RCTRL) != 0
+    input.alt = key_at(keys, SCAN_LALT) != 0 || key_at(keys, SCAN_RALT) != 0
+}
+
+pub fn end_frame(input: mut ref Input) void = {
+    input.clicked_left = false
+    input.released_left = false
+    input.clicked_right = false
+    input.released_right = false
+    input.wheel = 0
+}
+
+fn key_at(keys: ref u8, scancode: u8) u8 = {
+    if keys == none {
+        return 0
+    }
+    return mem.u8_at(keys, scancode as i32)
+}
+
+pub fn key_down(scancode: u8) bool = trust {
+    val n: mut i32 = 0
+    val keys = sdl.SDL_GetKeyboardState(@addr(n))
+    return key_at(keys, scancode) != 0
+}
+
+pub fn shift_down() bool = trust {
+    return key_down(SCAN_LSHIFT) || key_down(SCAN_RSHIFT)
+}
+
+pub fn ctrl_down() bool = trust {
+    return key_down(SCAN_LCTRL) || key_down(SCAN_RCTRL)
+}
+
+pub fn alt_down() bool = trust {
+    return key_down(SCAN_LALT) || key_down(SCAN_RALT)
+}

@@ -1,0 +1,234 @@
+val math  = use("../core/math.sx")
+val mem   = use("../core/mem.sx")
+val brush = use("./brush.sx")
+
+pub val MAX_PIECES: i32 = 96
+
+pub type BrushPool = {
+    count: mut i32
+    items: [96]ref brush.Brush
+}
+
+pub fn pool_init(p: mut ref BrushPool) void = {
+    p.count = 0
+}
+
+pub fn new_brush() ref brush.Brush = {
+    val raw = mem.allocate(@sizeof(brush.Brush) as i64)
+    val b: mut ref brush.Brush = raw as ref brush.Brush
+    mem.zero(b as ref void, @sizeof(brush.Brush) as i64)
+    brush.init(b)
+    return b
+}
+
+pub fn free_brush(b: mut ref brush.Brush) void = {
+    brush.dispose(b)
+    mem.release(b as ref void)
+}
+
+pub fn pool_push(p: mut ref BrushPool, b: mut ref brush.Brush) bool = {
+    if p.count >= MAX_PIECES {
+        free_brush(b)
+        return false
+    }
+    mem.store_ref(@addr(p.items) as ref void, p.count, b as ref void)
+    p.count++
+    return true
+}
+
+pub fn pool_at(p: mut ref BrushPool, i: i32) ref brush.Brush = {
+    return mem.load_ref(@addr(p.items) as ref void, i) as ref brush.Brush
+}
+
+pub fn pool_clear(p: mut ref BrushPool) void = {
+    val i: mut i32 = 0
+    for {
+        if i >= p.count {
+            break
+        }
+        val b: mut ref brush.Brush = pool_at(p, i)
+        free_brush(b)
+        i++
+    }
+    p.count = 0
+}
+
+/// Subtract `cutter` from `a`, pushing each resulting convex piece into `pool`.
+/// The caller owns the pieces in the pool.
+pub fn subtract(
+    a: mut ref brush.Brush,
+    cutter: mut ref brush.Brush,
+    pool: mut ref BrushPool
+) void = {
+    val remaining: mut ref brush.Brush = new_brush()
+    brush.copy(remaining, a)
+
+    val fi: mut i32 = 0
+    for {
+        if fi >= cutter.face_count {
+            break
+        }
+        if !remaining.valid {
+            free_brush(remaining)
+            return
+        }
+        val f = brush.face(cutter, fi)
+
+        val piece: mut ref brush.Brush = new_brush()
+        brush.copy(piece, remaining)
+        brush.add_plane(piece, math.v3_neg(f.normal), -f.dist)
+        brush.rebuild(piece)
+        if piece.valid {
+            if !pool_push(pool, piece) {
+                free_brush(remaining)
+                return
+            }
+        } else {
+            free_brush(piece)
+        }
+
+        brush.add_plane(remaining, f.normal, f.dist)
+        brush.rebuild(remaining)
+        fi++
+    }
+    free_brush(remaining)
+}
+
+/// Intersect two convex brushes by combining their halfspaces.
+pub fn intersect(a: mut ref brush.Brush, b: mut ref brush.Brush, out: mut ref brush.Brush) bool = {
+    brush.clear(out)
+    val i: mut i32 = 0
+    for {
+        if i >= a.face_count {
+            break
+        }
+        val f = brush.face(a, i)
+        brush.add_plane(out, f.normal, f.dist)
+        i++
+    }
+    i = 0
+    for {
+        if i >= b.face_count {
+            break
+        }
+        val f = brush.face(b, i)
+        brush.add_plane(out, f.normal, f.dist)
+        i++
+    }
+    brush.rebuild(out)
+    return out.valid
+}
+
+fn point_get(points: ref math.Vec3, i: i32) math.Vec3 = {
+    val base = points as ref void
+    return math.v3(
+        mem.f64_at(base, i * 3),
+        mem.f64_at(base, i * 3 + 1),
+        mem.f64_at(base, i * 3 + 2)
+    )
+}
+
+fn gather_unique(points: ref math.Vec3, count: mut ref i32, p: math.Vec3) void = {
+    val n = @deref(count)
+    if n >= 64 {
+        return
+    }
+    val i: mut i32 = 0
+    for {
+        if i >= n {
+            break
+        }
+        if math.v3_dist(point_get(points, i), p) < 0.01 {
+            return
+        }
+        i++
+    }
+    val base = points as ref void
+    mem.set_f64(base, n * 3 + 0, p.x)
+    mem.set_f64(base, n * 3 + 1, p.y)
+    mem.set_f64(base, n * 3 + 2, p.z)
+    @deref(count) = n + 1
+}
+
+fn add_points(points: ref math.Vec3, count: mut ref i32, from: mut ref brush.Brush) void = {
+    val i: mut i32 = 0
+    for {
+        if i >= from.vert_count {
+            break
+        }
+        gather_unique(points, count, @deref(brush.vert(from, i)))
+        i++
+    }
+}
+
+/// Convex hull of the union of two brushes, used by the Merge CSG action.
+/// Only meaningful when the resulting shape is convex.
+pub fn merge_hull(a: mut ref brush.Brush, b: mut ref brush.Brush, out: mut ref brush.Brush) bool = {
+    val points = mem.allocate(64 * @sizeof(math.Vec3) as i64) as ref math.Vec3
+    val count: mut i32 = 0
+    add_points(points, @addr(count), a)
+    add_points(points, @addr(count), b)
+    val n_points = count
+    if n_points < 4 {
+        mem.release(points as ref void)
+        return false
+    }
+
+    brush.clear(out)
+    val i: mut i32 = 0
+    for {
+        if i >= n_points - 2 {
+            break
+        }
+        val j: mut i32 = i + 1
+        for {
+            if j >= n_points - 1 {
+                break
+            }
+            val k: mut i32 = j + 1
+            for {
+                if k >= n_points {
+                    break
+                }
+                val pa = point_get(points, i)
+                val pb = point_get(points, j)
+                val pc = point_get(points, k)
+                val cross = math.v3_cross(math.v3_sub(pb, pa), math.v3_sub(pc, pa))
+                if math.v3_len_sq(cross) > 0.0001 {
+                    val n = math.v3_normalize(cross)
+                    val d = math.v3_dot(n, pa)
+                    val above: mut bool = false
+                    val below: mut bool = false
+                    val m: mut i32 = 0
+                    for {
+                        if m >= n_points {
+                            break
+                        }
+                        val sd = math.v3_dot(n, point_get(points, m)) - d
+                        if sd > 0.05 {
+                            above = true
+                        }
+                        if sd < -0.05 {
+                            below = true
+                        }
+                        m++
+                    }
+                    if !(above && below) {
+                        if above {
+                            brush.add_plane(out, math.v3_neg(n), -d)
+                        } else {
+                            brush.add_plane(out, n, d)
+                        }
+                    }
+                }
+                k++
+            }
+            j++
+        }
+        i++
+    }
+
+    brush.rebuild(out)
+    mem.release(points as ref void)
+    return out.valid
+}

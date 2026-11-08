@@ -1,0 +1,289 @@
+val sdl   = use("../platform/sdl.sx")
+val gl    = use("../platform/gl.sx")
+val mem   = use("../core/mem.sx")
+val str   = use("../core/strutil.sx")
+val color = use("../core/color.sx")
+val fs    = use("std/fs")
+val stdio = use("std/stdio")
+
+pub type TextEntry = {
+    text: ref u8
+    tex: u32
+    width: i32
+    height: i32
+    size: i32
+    live: bool
+}
+
+val fonts_ptr: mut ref void = none
+val cache_ptr: mut ref void = none
+val cache_count: mut i32 = 0
+val ready: mut bool = false
+
+fn font_size(size: i32) i32 = {
+    if size == 0 {
+        return 13
+    }
+    if size == 1 {
+        return 16
+    }
+    return 20
+}
+
+fn ensure_fonts() void = {
+    if fonts_ptr == none {
+        fonts_ptr = mem.allocate(3 * 8)
+        mem.zero(fonts_ptr, 3 * 8)
+    }
+}
+
+fn ensure_cache() void = {
+    if cache_ptr == none {
+        cache_ptr = mem.allocate(768 * 8)
+        mem.zero(cache_ptr, 768 * 8)
+    }
+}
+
+fn font_at(size: i32) ref void = {
+    if fonts_ptr == none {
+        return none
+    }
+    val i: mut i32 = size
+    if i < 0 {
+        i = 0
+    }
+    if i > 2 {
+        i = 2
+    }
+    return mem.load_ref(fonts_ptr, i)
+}
+
+fn set_font(i: i32, f: ref void) void = {
+    ensure_fonts()
+    mem.store_ref(fonts_ptr, i, f)
+}
+
+fn cache_at(i: i32) ref TextEntry = {
+    return mem.load_ref(cache_ptr, i) as ref TextEntry
+}
+
+fn file_readable(path: ref u8) bool = trust {
+    val sz = fs.file_size(path)
+    match sz {
+        some _ => {
+            return true
+        }
+        none => {
+            return false
+        }
+    }
+}
+
+pub fn init(base_path: ref u8) void = trust {
+    if sdl.TTF_Init() != 0 {
+        stdio.eputs("sunmap: TTF_Init failed")
+        stdio.eputs(sdl.SDL_GetError())
+        return
+    }
+
+    val path: mut [512]u8 = @zeroed
+    val p = @addr(path) as ref u8
+    @snprintf(p, 512, "{s}assets/font.ttf", {base_path})
+    if !file_readable(p) {
+        str.copy(p, 512, "assets/font.ttf")
+    }
+    if !file_readable(p) {
+        str.copy(p, 512, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    }
+    if !file_readable(p) {
+        str.copy(p, 512, "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf")
+    }
+    if !file_readable(p) {
+        str.copy(p, 512, "/System/Library/Fonts/Helvetica.ttc")
+    }
+    if !file_readable(p) {
+        str.copy(p, 512, "C:\\Windows\\Fonts\\segoeui.ttf")
+    }
+
+    val first: mut ref void = none
+    val i: mut i32 = 0
+    for {
+        if i >= 3 {
+            break
+        }
+        val f = sdl.TTF_OpenFont(p, font_size(i))
+        if i == 0 {
+            first = f
+        }
+        if f == none {
+            set_font(i, first)
+        } else {
+            set_font(i, f)
+        }
+        i++
+    }
+    ready = first != none
+    if !ready {
+        stdio.eputs("sunmap: no font could be loaded; UI text disabled")
+    }
+}
+
+pub fn clear_cache() void = trust {
+    ensure_cache()
+    val i: mut i32 = 0
+    for {
+        if i >= cache_count {
+            break
+        }
+        val e: mut ref TextEntry = cache_at(i)
+        if e.tex != 0 {
+            val t: mut u32 = e.tex
+            gl.glDeleteTextures(1, @addr(t))
+        }
+        if e.text != none {
+            mem.release(e.text as ref void)
+        }
+        mem.release(e as ref void)
+        i++
+    }
+    cache_count = 0
+}
+
+fn lookup(size: i32, text: ref u8) TextEntry = {
+    val i: mut i32 = 0
+    for {
+        if i >= cache_count {
+            break
+        }
+        val e = cache_at(i)
+        if e.live && e.size == size && str.eql(e.text, text) {
+            return @deref(e)
+        }
+        i++
+    }
+    return TextEntry{text: none, tex: 0, width: 0, height: 0, size: size, live: false}
+}
+
+fn build(size: i32, text: ref u8) TextEntry = trust {
+    val font = font_at(size)
+    if font == none {
+        return TextEntry{text: none, tex: 0, width: 0, height: 0, size: size, live: false}
+    }
+    if str.len(text) == 0 {
+        return TextEntry{text: none, tex: 0, width: 0, height: 0, size: size, live: false}
+    }
+
+    val surf = sdl.TTF_RenderUTF8_Blended(font, text, 244 as u8, 246 as u8, 250 as u8, 255 as u8)
+    if surf == none {
+        return TextEntry{text: none, tex: 0, width: 0, height: 0, size: size, live: false}
+    }
+    val rgba = sdl.SDL_ConvertSurfaceFormat(surf, sdl.SDL_PIXELFORMAT_ABGR8888, 0)
+    sdl.SDL_FreeSurface(surf)
+    if rgba == none {
+        return TextEntry{text: none, tex: 0, width: 0, height: 0, size: size, live: false}
+    }
+
+    val s = rgba as ref sdl.SdlSurface
+    val tex: mut u32 = 0
+    gl.glGenTextures(1, @addr(tex))
+    gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MIN_FILTER, gl.GL_LINEAR)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_MAG_FILTER, gl.GL_LINEAR)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_S, gl.GL_CLAMP_TO_EDGE)
+    gl.glTexParameteri(gl.GL_TEXTURE_2D, gl.GL_TEXTURE_WRAP_T, gl.GL_CLAMP_TO_EDGE)
+    gl.glPixelStorei(gl.GL_UNPACK_ALIGNMENT, 1)
+    gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, s.pitch / 4)
+    gl.glTexImage2D(
+        gl.GL_TEXTURE_2D,
+        0,
+        gl.GL_RGBA as i32,
+        s.w,
+        s.h,
+        0,
+        gl.GL_RGBA,
+        gl.GL_UNSIGNED_BYTE,
+        s.pixels as ref void
+    )
+    gl.glPixelStorei(gl.GL_UNPACK_ROW_LENGTH, 0)
+    val entry = TextEntry{
+        text: str.dup(text)
+        tex: tex
+        width: s.w
+        height: s.h
+        size: size
+        live: true
+    }
+    sdl.SDL_FreeSurface(rgba)
+    return entry
+}
+
+pub fn get(size: i32, text: ref u8) TextEntry = trust {
+    if !ready {
+        return TextEntry{text: none, tex: 0, width: 0, height: 0, size: size, live: false}
+    }
+    ensure_cache()
+    val hit = lookup(size, text)
+    if hit.live {
+        return hit
+    }
+    if cache_count >= 768 {
+        clear_cache()
+    }
+    val entry: mut TextEntry = build(size, text)
+    if entry.live {
+        val raw = mem.allocate(@sizeof(TextEntry) as i64)
+        val slot: mut ref TextEntry = raw as ref TextEntry
+        mem.mem_copy(slot as ref void, @addr(entry) as ref void, @sizeof(TextEntry) as i64)
+        mem.store_ref(cache_ptr, cache_count, slot as ref void)
+        cache_count++
+    }
+    return entry
+}
+
+pub fn draw(size: i32, x: i32, y: i32, text: ref u8, c: color.Color) void = trust {
+    val e = get(size, text)
+    if !e.live {
+        return
+    }
+    gl.glEnable(gl.GL_TEXTURE_2D)
+    gl.glBindTexture(gl.GL_TEXTURE_2D, e.tex)
+    gl.glColor4f(c.r, c.g, c.b, c.a)
+    val fx = x as f32
+    val fy = y as f32
+    val fw = e.width as f32
+    val fh = e.height as f32
+    gl.glBegin(gl.GL_QUADS)
+    gl.glTexCoord2f(0.0, 0.0)
+    gl.glVertex2f(fx, fy)
+    gl.glTexCoord2f(1.0, 0.0)
+    gl.glVertex2f(fx + fw, fy)
+    gl.glTexCoord2f(1.0, 1.0)
+    gl.glVertex2f(fx + fw, fy + fh)
+    gl.glTexCoord2f(0.0, 1.0)
+    gl.glVertex2f(fx, fy + fh)
+    gl.glEnd()
+}
+
+pub fn width(size: i32, text: ref u8) i32 = trust {
+    return get(size, text).width
+}
+
+pub fn height(size: i32, text: ref u8) i32 = trust {
+    return get(size, text).height
+}
+
+pub fn shutdown() void = trust {
+    clear_cache()
+    val i: mut i32 = 0
+    for {
+        if i >= 3 {
+            break
+        }
+        val f = font_at(i)
+        if f != none && !(i > 0 && f == font_at(0)) {
+            sdl.TTF_CloseFont(f)
+        }
+        i++
+    }
+    sdl.TTF_Quit()
+}

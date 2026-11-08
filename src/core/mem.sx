@@ -1,0 +1,131 @@
+// Low-level memory helpers.
+//
+// Spectre marks raw pointer arithmetic and dereferencing as trust-requiring.
+// All of that is localized here so the rest of the editor can stay readable.
+
+pub fn ptr(base: ref void, byte_offset: i64) ref void = {
+    return trust @ptradd(base, byte_offset)
+}
+
+pub fn ptr_add(base: ref void, byte_offset: i64) ref void = {
+    return trust @ptradd(base, byte_offset)
+}
+
+pub fn f64_at(base: ref void, index: i32) f64 = {
+    val p = trust (@ptradd(base, index as i64 * 8) as ref f64)
+    return @deref(p)
+}
+
+pub fn set_f64(base: ref void, index: i32, value: f64) void = {
+    val p: mut ref f64 = trust (@ptradd(base, index as i64 * 8) as ref f64)
+    @deref(p) = value
+}
+
+pub fn f32_at(base: ref void, index: i32) f32 = {
+    val p = trust (@ptradd(base, index as i64 * 4) as ref f32)
+    return @deref(p)
+}
+
+pub fn set_f32(base: ref void, index: i32, value: f32) void = {
+    val p: mut ref f32 = trust (@ptradd(base, index as i64 * 4) as ref f32)
+    @deref(p) = value
+}
+
+pub fn i32_at(base: ref void, index: i32) i32 = {
+    val p = trust (@ptradd(base, index as i64 * 4) as ref i32)
+    return @deref(p)
+}
+
+pub fn set_i32(base: ref void, index: i32, value: i32) void = {
+    val p: mut ref i32 = trust (@ptradd(base, index as i64 * 4) as ref i32)
+    @deref(p) = value
+}
+
+pub fn u32_at(base: ref void, index: i32) u32 = {
+    val p = trust (@ptradd(base, index as i64 * 4) as ref u32)
+    return @deref(p)
+}
+
+pub fn set_u32(base: ref void, index: i32, value: u32) void = {
+    val p: mut ref u32 = trust (@ptradd(base, index as i64 * 4) as ref u32)
+    @deref(p) = value
+}
+
+pub fn u16_at(base: ref void, index: i32) u16 = {
+    val p = trust (@ptradd(base, index as i64 * 2) as ref u16)
+    return @deref(p)
+}
+
+pub fn set_u16(base: ref void, index: i32, value: u16) void = {
+    val p: mut ref u16 = trust (@ptradd(base, index as i64 * 2) as ref u16)
+    @deref(p) = value
+}
+
+pub fn u8_at(base: ref void, index: i32) u8 = {
+    val p = trust (@ptradd(base, index as i64) as ref u8)
+    return @deref(p)
+}
+
+pub fn set_u8(base: ref void, index: i32, value: u8) void = {
+    val p: mut ref u8 = trust (@ptradd(base, index as i64) as ref u8)
+    @deref(p) = value
+}
+
+pub fn i32_off(base: ref void, byte_offset: i64) i32 = {
+    val p = trust (@ptradd(base, byte_offset) as ref i32)
+    return @deref(p)
+}
+
+pub fn u32_off(base: ref void, byte_offset: i64) u32 = {
+    val p = trust (@ptradd(base, byte_offset) as ref u32)
+    return @deref(p)
+}
+
+pub fn u16_off(base: ref void, byte_offset: i64) u16 = {
+    val p = trust (@ptradd(base, byte_offset) as ref u16)
+    return @deref(p)
+}
+
+pub fn ptr_off(base: ref void, byte_offset: i64) ref void = {
+    val p = trust @ptradd(base, byte_offset)
+    return trust @load(p)
+}
+
+pub fn load_ref(base: ref void, index: i32) ref void = {
+    val p = trust @ptradd(base, index as i64 * 8)
+    return trust @load(p)
+}
+
+pub fn store_ref(base: ref void, index: i32, value: ref void) void = {
+    val p: mut ref void = trust @ptradd(base, index as i64 * 8)
+    trust @store(p, value)
+}
+
+pub fn mem_copy(dst: ref void, src: ref void, bytes: i64) void = {
+    trust @memcpy(dst, src, bytes as usize)
+}
+
+pub fn mem_move(dst: ref void, src: ref void, bytes: i64) void = {
+    trust @memmove(dst, src, bytes as usize)
+}
+
+pub fn mem_set(dst: ref void, value: i32, bytes: i64) void = {
+    trust @memset(dst, value, bytes as usize)
+}
+
+pub fn allocate(bytes: i64) ref void = {
+    return @alloc(bytes as usize)
+}
+
+pub fn release(p: ref void) void = {
+    trust @free(p)
+    return
+}
+
+pub fn reallocate(p: ref void, bytes: i64) ref void = {
+    return trust @realloc(p, bytes as usize)
+}
+
+pub fn zero(base: ref void, bytes: i64) void = {
+    mem_set(base, 0, bytes)
+}

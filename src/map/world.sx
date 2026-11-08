@@ -1,0 +1,594 @@
+val math       = use("../core/math.sx")
+val mem        = use("../core/mem.sx")
+val str        = use("../core/strutil.sx")
+val c          = use("../core/constants.sx")
+val brush      = use("./brush.sx")
+val csg        = use("./csg.sx")
+val texture    = use("./texture.sx")
+val fs         = use("std/fs")
+val allocators = use("std/allocators")
+
+pub type Hit = {
+    brush: mut i32
+    face: mut i32
+    t: mut f64
+    point: mut math.Vec3
+}
+
+pub type World = {
+    brushes: [1024]ref brush.Brush
+    brush_count: mut i32
+    textures: [256]ref texture.Texture
+    texture_count: mut i32
+    name: [64]u8
+}
+
+fn brushes_ptr(w: mut ref World) ref void = {
+    return @addr(w.brushes) as ref void
+}
+
+fn textures_ptr(w: mut ref World) ref void = {
+    return @addr(w.textures) as ref void
+}
+
+pub fn set_brush_raw(w: mut ref World, i: i32, b: ref brush.Brush) void = {
+    mem.store_ref(brushes_ptr(w), i, b as ref void)
+}
+
+pub fn brush_at(w: mut ref World, i: i32) ref brush.Brush = {
+    return mem.load_ref(brushes_ptr(w), i) as ref brush.Brush
+}
+
+pub fn texture_at(w: mut ref World, i: i32) ref texture.Texture = {
+    return mem.load_ref(textures_ptr(w), i) as ref texture.Texture
+}
+
+pub fn create() ref World = trust {
+    val raw = mem.allocate(@sizeof(World) as i64)
+    val w: mut ref World = raw as ref World
+    mem.zero(w as ref void, @sizeof(World) as i64)
+    copy_name(w, "untitled")
+    val def = texture.make_default()
+    add_texture(w, def)
+    return w
+}
+
+pub fn copy_name(w: mut ref World, value: ref u8) void = {
+    str.copy(name_ptr(w), 64, value)
+}
+
+pub fn name_ptr(w: mut ref World) ref u8 = {
+    return @addr(w.name) as ref u8
+}
+
+pub fn name(w: mut ref World) ref u8 = {
+    return @addr(w.name) as ref u8
+}
+
+pub fn add_texture(w: mut ref World, t: texture.Texture) i32 = {
+    if w.texture_count >= c.MAX_TEXTURES {
+        return -1
+    }
+    val raw = mem.allocate(@sizeof(texture.Texture) as i64)
+    val dst: mut ref texture.Texture = raw as ref texture.Texture
+    dst.name = t.name
+    dst.path = t.path
+    dst.width = t.width
+    dst.height = t.height
+    dst.gl = t.gl
+    dst.live = t.live
+    mem.store_ref(textures_ptr(w), w.texture_count, dst as ref void)
+    w.texture_count++
+    return w.texture_count - 1
+}
+
+pub fn default_texture(_: mut ref World) i32 = {
+    return 0
+}
+
+pub fn texture_gl(w: mut ref World, index: i32) u32 = {
+    if index < 0 || index >= w.texture_count {
+        if w.texture_count > 0 {
+            return texture_at(w, 0).gl
+        }
+        return 0
+    }
+    val t = texture_at(w, index)
+    if t.live {
+        return t.gl
+    }
+    if w.texture_count > 0 {
+        return texture_at(w, 0).gl
+    }
+    return 0
+}
+
+pub fn texture_width(w: mut ref World, index: i32) f64 = {
+    if index < 0 || index >= w.texture_count {
+        return 64.0
+    }
+    val t = texture_at(w, index)
+    if t.width <= 0 {
+        return 64.0
+    }
+    return t.width as f64
+}
+
+pub fn texture_height(w: mut ref World, index: i32) f64 = {
+    if index < 0 || index >= w.texture_count {
+        return 64.0
+    }
+    val t = texture_at(w, index)
+    if t.height <= 0 {
+        return 64.0
+    }
+    return t.height as f64
+}
+
+pub fn add_brush(w: mut ref World, b: ref brush.Brush) i32 = {
+    if w.brush_count >= c.MAX_BRUSHES {
+        return -1
+    }
+    val bm: mut ref brush.Brush = b
+    if bm.tex < 0 {
+        bm.tex = default_texture(w)
+    }
+    set_brush_raw(w, w.brush_count, bm)
+    w.brush_count++
+    return w.brush_count - 1
+}
+
+pub fn add_brush_copy(w: mut ref World, src: ref brush.Brush) i32 = {
+    if w.brush_count >= c.MAX_BRUSHES {
+        return -1
+    }
+    val nb: mut ref brush.Brush = csg.new_brush()
+    brush.copy(nb, src)
+    return add_brush(w, nb)
+}
+
+pub fn remove_brush(w: mut ref World, index: i32) void = {
+    if index < 0 || index >= w.brush_count {
+        return
+    }
+    val doomed = brush_at(w, index)
+    val last = w.brush_count - 1
+    if index != last {
+        set_brush_raw(w, index, brush_at(w, last))
+    }
+    w.brush_count = last
+    val dm: mut ref brush.Brush = doomed
+    csg.free_brush(dm)
+}
+
+pub fn clear_brushes(w: mut ref World) void = {
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = brush_at(w, i)
+        csg.free_brush(b)
+        i++
+    }
+    w.brush_count = 0
+}
+
+pub fn clear_all(w: mut ref World) void = trust {
+    clear_brushes(w)
+    val i: mut i32 = 0
+    for {
+        if i >= w.texture_count {
+            break
+        }
+        val t: mut ref texture.Texture = texture_at(w, i)
+        texture.free(t)
+        mem.release(t as ref void)
+        i++
+    }
+    w.texture_count = 0
+}
+
+pub fn deselect_all(w: mut ref World) void = {
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = brush_at(w, i)
+        b.selected = false
+        i++
+    }
+}
+
+pub fn select_all(w: mut ref World) void = {
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = brush_at(w, i)
+        b.selected = true
+        i++
+    }
+}
+
+pub fn selected_count(w: mut ref World) i32 = {
+    val n: mut i32 = 0
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        if brush_at(w, i).selected {
+            n++
+        }
+        i++
+    }
+    return n
+}
+
+pub fn delete_selected(w: mut ref World) i32 = {
+    val temp: mut [1024]ref brush.Brush = @zeroed
+    val kept: mut i32 = 0
+    val removed: mut i32 = 0
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b = brush_at(w, i)
+        if b.selected {
+            val bm: mut ref brush.Brush = b
+            csg.free_brush(bm)
+            removed++
+        } else {
+            mem.store_ref(@addr(temp) as ref void, kept, b as ref void)
+            kept++
+        }
+        i++
+    }
+    i = 0
+    for {
+        if i >= kept {
+            break
+        }
+        set_brush_raw(w, i, mem.load_ref(@addr(temp) as ref void, i) as ref brush.Brush)
+        i++
+    }
+    w.brush_count = kept
+    return removed
+}
+
+pub fn apply_texture(w: mut ref World, tex: i32) void = {
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = brush_at(w, i)
+        if b.selected {
+            b.tex = tex
+        }
+        i++
+    }
+}
+
+pub fn nudge_selected(w: mut ref World, delta: math.Vec3) void = {
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = brush_at(w, i)
+        if b.selected {
+            brush.translate(b, delta)
+        }
+        i++
+    }
+}
+
+pub fn raycast(w: mut ref World, ray: math.Ray) Hit = {
+    val best: mut Hit = Hit{brush: -1, face: -1, t: 1.0e30, point: math.v3(0.0, 0.0, 0.0)}
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = brush_at(w, i)
+        if b.valid {
+            val f: mut i32 = -1
+            val t = brush.raycast(b, ray, @addr(f))
+            if t > 0.0 && t < best.t {
+                best.brush = i
+                best.face = f
+                best.t = t
+                best.point = math.v3_add(ray.origin, math.v3_mul(ray.dir, t))
+            }
+        }
+        i++
+    }
+    return best
+}
+
+fn push_temp(temp: mut ref [1024]ref brush.Brush, count: mut ref i32, b: ref brush.Brush) void = {
+    val n = @deref(count)
+    if n >= c.MAX_BRUSHES {
+        val bm: mut ref brush.Brush = b
+        csg.free_brush(bm)
+        return
+    }
+    mem.store_ref(temp as ref void, n, b as ref void)
+    @deref(count) = n + 1
+}
+
+fn flush_temp(w: mut ref World, temp: mut ref [1024]ref brush.Brush, count: i32) void = {
+    val i: mut i32 = 0
+    for {
+        if i >= count {
+            break
+        }
+        set_brush_raw(w, i, mem.load_ref(temp as ref void, i) as ref brush.Brush)
+        i++
+    }
+    w.brush_count = count
+}
+
+pub fn hollow_selected(w: mut ref World, thickness: f64) i32 = {
+    val pool: mut csg.BrushPool = @zeroed
+    csg.pool_init(@addr(pool))
+    val temp: mut [1024]ref brush.Brush = @zeroed
+    val count: mut i32 = 0
+    val made: mut i32 = 0
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = brush_at(w, i)
+        if !b.selected {
+            push_temp(@addr(temp), @addr(count), b)
+            i++
+        } else {
+            val inner: mut ref brush.Brush = csg.new_brush()
+            val t: mut f64 = thickness
+            val tries: mut i32 = 0
+            for {
+                if tries >= 6 {
+                    break
+                }
+                brush.copy(inner, b)
+                val fi: mut i32 = 0
+                for {
+                    if fi >= inner.face_count {
+                        break
+                    }
+                    val f: mut ref math.Plane = brush.face(inner, fi)
+                    f.dist = f.dist - t
+                    fi++
+                }
+                brush.rebuild(inner)
+                if inner.valid && inner.volume > 0.5 {
+                    break
+                }
+                t = t * 0.5
+                tries++
+            }
+
+            if inner.valid && inner.volume > 0.5 {
+                csg.pool_init(@addr(pool))
+                csg.subtract(b, inner, @addr(pool))
+                if pool.count > 0 {
+                    val j: mut i32 = 0
+                    for {
+                        if j >= pool.count {
+                            break
+                        }
+                        val piece: mut ref brush.Brush = csg.pool_at(@addr(pool), j)
+                        piece.selected = true
+                        push_temp(@addr(temp), @addr(count), piece)
+                        made++
+                        j++
+                    }
+                    pool.count = 0
+                    csg.free_brush(b)
+                } else {
+                    push_temp(@addr(temp), @addr(count), b)
+                }
+            } else {
+                push_temp(@addr(temp), @addr(count), b)
+            }
+            csg.free_brush(inner)
+            i++
+        }
+    }
+    flush_temp(w, @addr(temp), count)
+    return made
+}
+
+pub fn subtract_selected(w: mut ref World) i32 = {
+    val cutter: mut ref brush.Brush = none
+    val ci: mut i32 = 0
+    for {
+        if ci >= w.brush_count {
+            break
+        }
+        val b = brush_at(w, ci)
+        if b.selected {
+            cutter = b
+            break
+        }
+        ci++
+    }
+    if cutter == none {
+        return 0
+    }
+
+    val pool: mut csg.BrushPool = @zeroed
+    csg.pool_init(@addr(pool))
+    val temp: mut [1024]ref brush.Brush = @zeroed
+    val count: mut i32 = 0
+    val pieces_made: mut i32 = 0
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = brush_at(w, i)
+        if b == cutter {
+            i++
+        } else {
+            csg.pool_init(@addr(pool))
+            csg.subtract(b, cutter, @addr(pool))
+            if pool.count > 0 {
+                val j: mut i32 = 0
+                for {
+                    if j >= pool.count {
+                        break
+                    }
+                    val piece: mut ref brush.Brush = csg.pool_at(@addr(pool), j)
+                    piece.selected = false
+                    piece.tex = b.tex
+                    push_temp(@addr(temp), @addr(count), piece)
+                    pieces_made++
+                    j++
+                }
+                pool.count = 0
+                csg.free_brush(b)
+            } else {
+                push_temp(@addr(temp), @addr(count), b)
+            }
+            i++
+        }
+    }
+    csg.free_brush(cutter)
+    flush_temp(w, @addr(temp), count)
+    return pieces_made
+}
+
+fn merge_group(w: mut ref World, use_intersect: bool) bool = {
+    val sel: mut [1024]ref brush.Brush = @zeroed
+    val sn: mut i32 = 0
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b = brush_at(w, i)
+        if b.selected {
+            mem.store_ref(@addr(sel) as ref void, sn, b as ref void)
+            sn++
+        }
+        i++
+    }
+    if sn < 2 {
+        return false
+    }
+
+    val first: mut ref brush.Brush = mem.load_ref(@addr(sel) as ref void, 0) as ref brush.Brush
+    val result: mut ref brush.Brush = csg.new_brush()
+    val work: mut ref brush.Brush = csg.new_brush()
+    brush.copy(work, first)
+    val good: mut bool = true
+
+    if use_intersect {
+        val second: mut ref brush.Brush = mem.load_ref(@addr(sel) as ref void, 1) as ref brush.Brush
+        if !csg.intersect(work, second, result) {
+            good = false
+        }
+    } else {
+        val k: mut i32 = 1
+        for {
+            if k >= sn {
+                break
+            }
+            val other: mut ref brush.Brush = mem.load_ref(
+                @addr(sel) as ref void,
+                k
+            ) as ref brush.Brush
+            if !csg.merge_hull(work, other, result) {
+                good = false
+                break
+            }
+            brush.copy(work, result)
+            k++
+        }
+    }
+
+    if !good {
+        csg.free_brush(result)
+        csg.free_brush(work)
+        return false
+    }
+
+    val temp: mut [1024]ref brush.Brush = @zeroed
+    val count: mut i32 = 0
+    val j: mut i32 = 0
+    for {
+        if j >= w.brush_count {
+            break
+        }
+        val b = brush_at(w, j)
+        if !b.selected {
+            push_temp(@addr(temp), @addr(count), b)
+        }
+        j++
+    }
+
+    val nb: mut ref brush.Brush = csg.new_brush()
+    brush.copy(nb, result)
+    nb.selected = true
+    nb.tex = first.tex
+    push_temp(@addr(temp), @addr(count), nb)
+
+    j = 0
+    for {
+        if j >= sn {
+            break
+        }
+        val doomed: mut ref brush.Brush = mem.load_ref(@addr(sel) as ref void, j) as ref brush.Brush
+        csg.free_brush(doomed)
+        j++
+    }
+    flush_temp(w, @addr(temp), count)
+    csg.free_brush(result)
+    csg.free_brush(work)
+    return true
+}
+
+pub fn merge_selected(w: mut ref World) bool = {
+    return merge_group(w, false)
+}
+
+pub fn intersect_selected(w: mut ref World) bool = {
+    return merge_group(w, true)
+}
+
+pub fn load_textures(w: mut ref World, dir: ref u8) void = trust {
+    val heap: allocators.HeapAllocator = @zeroed
+    val entries = fs.walk_dir_raw[allocators.HeapAllocator](heap, dir)
+    if entries is some list {
+        val n = @len(list)
+        val i: mut i64 = 0
+        for {
+            if i >= n as i64 {
+                break
+            }
+            val got = @get(list, i as usize)
+            if got is some entry {
+                val e = entry as ref u8
+                if str.is_image(e) && w.texture_count < c.MAX_TEXTURES {
+                    val buf: mut [512]u8 = @zeroed
+                    val p = @addr(buf) as ref u8
+                    @snprintf(p, 512, "{s}/{s}", {dir, e})
+                    val t = texture.load_file(p)
+                    if t.live {
+                        add_texture(w, t)
+                    }
+                }
+            }
+            i++
+        }
+        @listfree(list)
+    }
+}

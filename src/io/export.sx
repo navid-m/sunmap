@@ -1,0 +1,76 @@
+val paths   = use("./paths.sx")
+val mapfile = use("./mapfile.sx")
+val obj     = use("./export_obj.sx")
+val gltf    = use("./export_gltf.sx")
+val world   = use("../map/world.sx")
+val texture = use("../map/texture.sx")
+val str     = use("../core/strutil.sx")
+
+pub fn prepare_textures(w: mut ref world.World) bool = trust {
+    if !paths.ensure_export(w) {
+        return false
+    }
+    paths.copy_textures(w)
+    val tdir: mut [512]u8 = @zeroed
+    paths.texture_dir(w, @addr(tdir) as ref u8, 512)
+    val i: mut i32 = 1
+    for {
+        if i >= w.texture_count {
+            break
+        }
+        val t = world.texture_at(w, i)
+        if t.path != none && @strlen(t.path) > 0 {
+            val safe: mut [128]u8 = @zeroed
+            str.sanitize(@addr(safe) as ref u8, 128, t.name)
+            val dst: mut [512]u8 = @zeroed
+            @snprintf(
+                @addr(dst) as ref u8,
+                512,
+                "{s}/{s}.png",
+                {@addr(tdir) as ref u8, @addr(safe) as ref u8}
+            )
+            texture.save_png(t.path, @addr(dst) as ref u8)
+        }
+        i++
+    }
+    return true
+}
+
+pub fn export_map(w: mut ref world.World) bool = trust {
+    if !prepare_textures(w) {
+        return false
+    }
+    return mapfile.write_map(w)
+}
+
+pub fn export_obj(w: mut ref world.World) bool = trust {
+    if !prepare_textures(w) {
+        return false
+    }
+    return obj.write_obj(w)
+}
+
+pub fn export_gltf(w: mut ref world.World) bool = trust {
+    if !prepare_textures(w) {
+        return false
+    }
+    return gltf.write_gltf(w)
+}
+
+pub fn export_glb(w: mut ref world.World) bool = trust {
+    if !prepare_textures(w) {
+        return false
+    }
+    return gltf.write_glb(w)
+}
+
+pub fn export_all(w: mut ref world.World) bool = trust {
+    if !prepare_textures(w) {
+        return false
+    }
+    val wrote1 = mapfile.write_map(w)
+    val wrote2 = obj.write_obj(w)
+    val wrote3 = gltf.write_gltf(w)
+    val wrote4 = gltf.write_glb(w)
+    return wrote1 && wrote2 && wrote3 && wrote4
+}

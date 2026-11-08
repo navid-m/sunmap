@@ -1,0 +1,381 @@
+val gl      = use("../platform/gl.sx")
+val math    = use("../core/math.sx")
+val color   = use("../core/color.sx")
+val theme   = use("./theme.sx")
+val camera  = use("./camera.sx")
+val brush   = use("../map/brush.sx")
+val world   = use("../map/world.sx")
+val uistate = use("../ui/state.sx")
+val c       = use("../core/constants.sx")
+
+fn light_dir() math.Vec3 = {
+    return math.v3_normalize(math.v3(0.38, -0.55, 0.74))
+}
+
+pub fn init() void = trust {
+    gl.glEnable(gl.GL_DEPTH_TEST)
+    gl.glDepthFunc(gl.GL_LEQUAL)
+    gl.glDisable(gl.GL_CULL_FACE)
+    gl.glEnable(gl.GL_BLEND)
+    gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+    gl.glTexEnvi(gl.GL_TEXTURE_ENV, gl.GL_TEXTURE_ENV_MODE, gl.GL_MODULATE)
+}
+
+pub fn begin_3d(cam: ref camera.Camera, width: i32, height: i32) void = trust {
+    gl.glViewport(0, 0, width, height)
+    gl.glClearColor(theme.VIEW_BG().r, theme.VIEW_BG().g, theme.VIEW_BG().b, 1.0)
+    gl.glClear(gl.GL_COLOR_BUFFER_BIT | gl.GL_DEPTH_BUFFER_BIT)
+    gl.glEnable(gl.GL_DEPTH_TEST)
+    gl.glDepthMask(1)
+    gl.glDisable(gl.GL_TEXTURE_2D)
+    gl.glEnable(gl.GL_BLEND)
+    gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+
+    val aspect: f64 = width as f64 / (height as f64)
+    val proj = math.mat4_perspective(cam.fov * math.DEG, aspect, 1.0, 12000.0)
+    val buf: mut [16]f32 = @zeroed
+    math.mat4_write_f32(proj, @addr(buf) as ref void)
+    gl.glMatrixMode(gl.GL_PROJECTION)
+    gl.glLoadMatrixf(@addr(buf) as ref f32)
+
+    val view = camera.view(cam)
+    math.mat4_write_f32(view, @addr(buf) as ref void)
+    gl.glMatrixMode(gl.GL_MODELVIEW)
+    gl.glLoadMatrixf(@addr(buf) as ref f32)
+}
+
+fn color_set(c: color.Color) void = trust {
+    gl.glColor4f(c.r, c.g, c.b, c.a)
+}
+
+pub fn draw_grid(grid_size: f64) void = trust {
+    val step: mut f64 = grid_size
+    if step < 4.0 {
+        step = 4.0
+    }
+    val extent: f64 = 1024.0
+    val major: i32 = 8
+
+    gl.glDisable(gl.GL_TEXTURE_2D)
+    gl.glBegin(gl.GL_LINES)
+    val i: mut i32 = 0
+    val n: i32 = (extent / step) as i32
+    for {
+        if i > n {
+            break
+        }
+        val p = i as f64 * step
+        val col: mut color.Color = theme.GRID_MINOR()
+        if i % major == 0 {
+            col = theme.GRID_MAJOR()
+        }
+        if i == 0 {
+            col = theme.GRID_AXIS_X()
+        }
+        color_set(col)
+        gl.glVertex3f(0.0 - extent as f32, p as f32, -0.04)
+        gl.glVertex3f(extent as f32, p as f32, -0.04)
+
+        col = theme.GRID_MINOR()
+        if i % major == 0 {
+            col = theme.GRID_MAJOR()
+        }
+        if i == 0 {
+            col = theme.GRID_AXIS_Y()
+        }
+        color_set(col)
+        gl.glVertex3f(p as f32, 0.0 - extent as f32, -0.04)
+        gl.glVertex3f(p as f32, extent as f32, -0.04)
+        i++
+    }
+    gl.glEnd()
+}
+
+fn face_shade(n: math.Vec3) f64 = {
+    val d = math.v3_dot(n, light_dir())
+    val lit: mut f64 = d
+    if lit < 0.0 {
+        lit = 0.0
+    }
+    return 0.58 + 0.42 * lit
+}
+
+fn set_fill_color(shade: f64, selected: bool) void = trust {
+    val r: mut f32 = shade as f32
+    val g: mut f32 = shade as f32
+    val b: mut f32 = (shade * 1.03) as f32
+    if selected {
+        r = r * 0.72 + theme.SELECT().r * 0.35
+        g = g * 0.72 + theme.SELECT().g * 0.30
+        b = b * 0.72 + theme.SELECT().b * 0.25
+    }
+    gl.glColor4f(r, g, b, 1.0)
+}
+
+pub fn draw_brush(b: mut ref brush.Brush, w: mut ref world.World, selected: bool) void = trust {
+    if !b.valid {
+        return
+    }
+    val tex = world.texture_gl(w, b.tex)
+    val tw = world.texture_width(w, b.tex)
+    val th = world.texture_height(w, b.tex)
+
+    if tex != 0 {
+        gl.glEnable(gl.GL_TEXTURE_2D)
+        gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
+    } else {
+        gl.glDisable(gl.GL_TEXTURE_2D)
+    }
+
+    gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
+    gl.glPolygonOffset(1.0, 1.0)
+
+    val fi: mut i32 = 0
+    for {
+        if fi >= b.face_count {
+            break
+        }
+        val f = brush.face(b, fi)
+        val n = f.normal
+        val shade = face_shade(n)
+        set_fill_color(shade, selected)
+        val count = brush.order_len(b, fi)
+        gl.glBegin(gl.GL_TRIANGLE_FAN)
+        val k: mut i32 = 0
+        for {
+            if k >= count {
+                break
+            }
+            val p = brush.face_vert(b, fi, k)
+            val uv = brush.face_uv(@deref(f), p, tw, th)
+            gl.glTexCoord2f(uv.x as f32, uv.y as f32)
+            gl.glVertex3f(p.x as f32, p.y as f32, p.z as f32)
+            k++
+        }
+        gl.glEnd()
+        fi++
+    }
+
+    gl.glDisable(gl.GL_POLYGON_OFFSET_FILL)
+    gl.glDisable(gl.GL_TEXTURE_2D)
+
+    if selected {
+        gl.glColor4f(theme.SELECT().r, theme.SELECT().g, theme.SELECT().b, 1.0)
+        gl.glLineWidth(1.8)
+    } else {
+        gl.glColor4f(0.08, 0.09, 0.11, 0.75)
+        gl.glLineWidth(1.0)
+    }
+    gl.glBegin(gl.GL_LINES)
+    fi = 0
+    for {
+        if fi >= b.face_count {
+            break
+        }
+        val count = brush.order_len(b, fi)
+        val k: mut i32 = 0
+        for {
+            if k >= count {
+                break
+            }
+            val a = brush.face_vert(b, fi, k)
+            val b2 = brush.face_vert(b, fi, (k + 1) % count)
+            gl.glVertex3f(a.x as f32, a.y as f32, a.z as f32)
+            gl.glVertex3f(b2.x as f32, b2.y as f32, b2.z as f32)
+            k++
+        }
+        fi++
+    }
+    gl.glEnd()
+    gl.glLineWidth(1.0)
+}
+
+pub fn draw_face_highlight_index(b: mut ref brush.Brush, fi: i32) void = trust {
+    if !b.valid || fi < 0 || fi >= b.face_count {
+        return
+    }
+    gl.glDisable(gl.GL_TEXTURE_2D)
+    gl.glEnable(gl.GL_BLEND)
+    gl.glBlendFunc(gl.GL_SRC_ALPHA, gl.GL_ONE_MINUS_SRC_ALPHA)
+    gl.glColor4f(theme.SELECT().r, theme.SELECT().g, theme.SELECT().b, 0.18)
+    val count = brush.order_len(b, fi)
+    gl.glBegin(gl.GL_TRIANGLE_FAN)
+    val k: mut i32 = 0
+    for {
+        if k >= count {
+            break
+        }
+        val p = brush.face_vert(b, fi, k)
+        gl.glVertex3f(p.x as f32, p.y as f32, p.z as f32)
+        k++
+    }
+    gl.glEnd()
+
+    gl.glColor4f(theme.SELECT().r, theme.SELECT().g, theme.SELECT().b, 0.9)
+    gl.glLineWidth(2.0)
+    gl.glBegin(gl.GL_LINE_STRIP)
+    k = 0
+    for {
+        if k >= count {
+            break
+        }
+        val p = brush.face_vert(b, fi, k)
+        gl.glVertex3f(p.x as f32, p.y as f32, p.z as f32)
+        k++
+    }
+    if count > 0 {
+        val p = brush.face_vert(b, fi, 0)
+        gl.glVertex3f(p.x as f32, p.y as f32, p.z as f32)
+    }
+    gl.glEnd()
+    gl.glLineWidth(1.0)
+}
+
+pub fn draw_vertices(b: mut ref brush.Brush, active: i32) void = trust {
+    if !b.valid {
+        return
+    }
+    gl.glDisable(gl.GL_TEXTURE_2D)
+    gl.glPointSize(7.0)
+    val i: mut i32 = 0
+    for {
+        if i >= b.vert_count {
+            break
+        }
+        val p = brush.vert(b, i)
+        if i == active {
+            gl.glColor4f(1.0, 0.85, 0.55, 1.0)
+            gl.glPointSize(10.0)
+        } else {
+            gl.glColor4f(theme.SELECT().r, theme.SELECT().g, theme.SELECT().b, 1.0)
+            gl.glPointSize(7.0)
+        }
+        gl.glBegin(gl.GL_POINTS)
+        gl.glVertex3f(p.x as f32, p.y as f32, p.z as f32)
+        gl.glEnd()
+        i++
+    }
+    gl.glPointSize(1.0)
+}
+
+pub fn draw_preview(ui: mut ref uistate.UIState) void = trust {
+    if !ui.preview_valid || !ui.preview.valid {
+        return
+    }
+    val b = @addr(ui.preview)
+    val bm: mut ref brush.Brush = b
+    gl.glDisable(gl.GL_TEXTURE_2D)
+    gl.glEnable(gl.GL_BLEND)
+    gl.glColor4f(theme.ACCENT().r, theme.ACCENT().g, theme.ACCENT().b, 0.16)
+    val fi: mut i32 = 0
+    for {
+        if fi >= bm.face_count {
+            break
+        }
+        val count = brush.order_len(bm, fi)
+        gl.glBegin(gl.GL_TRIANGLE_FAN)
+        val k: mut i32 = 0
+        for {
+            if k >= count {
+                break
+            }
+            val p = brush.face_vert(bm, fi, k)
+            gl.glVertex3f(p.x as f32, p.y as f32, p.z as f32)
+            k++
+        }
+        gl.glEnd()
+        fi++
+    }
+    gl.glColor4f(theme.ACCENT().r, theme.ACCENT().g, theme.ACCENT().b, 0.95)
+    gl.glLineWidth(1.6)
+    gl.glBegin(gl.GL_LINES)
+    fi = 0
+    for {
+        if fi >= bm.face_count {
+            break
+        }
+        val count = brush.order_len(bm, fi)
+        val k: mut i32 = 0
+        for {
+            if k >= count {
+                break
+            }
+            val a = brush.face_vert(bm, fi, k)
+            val b2 = brush.face_vert(bm, fi, (k + 1) % count)
+            gl.glVertex3f(a.x as f32, a.y as f32, a.z as f32)
+            gl.glVertex3f(b2.x as f32, b2.y as f32, b2.z as f32)
+            k++
+        }
+        fi++
+    }
+    gl.glEnd()
+    gl.glLineWidth(1.0)
+}
+
+pub fn draw_world(w: mut ref world.World, ui: mut ref uistate.UIState) void = trust {
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = world.brush_at(w, i)
+        draw_brush(b, w, b.selected)
+        i++
+    }
+
+    if ui.hover_brush >= 0 && ui.hover_brush < w.brush_count {
+        val hb: mut ref brush.Brush = world.brush_at(w, ui.hover_brush)
+        if !hb.selected {
+            gl.glDisable(gl.GL_TEXTURE_2D)
+            gl.glColor4f(theme.ACCENT().r, theme.ACCENT().g, theme.ACCENT().b, 0.85)
+            gl.glLineWidth(1.4)
+            gl.glBegin(gl.GL_LINES)
+            val fi: mut i32 = 0
+            for {
+                if fi >= hb.face_count {
+                    break
+                }
+                val count = brush.order_len(hb, fi)
+                val k: mut i32 = 0
+                for {
+                    if k >= count {
+                        break
+                    }
+                    val a = brush.face_vert(hb, fi, k)
+                    val b2 = brush.face_vert(hb, fi, (k + 1) % count)
+                    gl.glVertex3f(a.x as f32, a.y as f32, a.z as f32)
+                    gl.glVertex3f(b2.x as f32, b2.y as f32, b2.z as f32)
+                    k++
+                }
+                fi++
+            }
+            gl.glEnd()
+            gl.glLineWidth(1.0)
+        }
+    }
+
+    if ui.face_brush >= 0 && ui.face_brush < w.brush_count && ui.face_index >= 0 {
+        val fb: mut ref brush.Brush = world.brush_at(w, ui.face_brush)
+        draw_face_highlight_index(fb, ui.face_index)
+    }
+
+    if ui.mode == c.MODE_VERTEX {
+        i = 0
+        for {
+            if i >= w.brush_count {
+                break
+            }
+            val b: mut ref brush.Brush = world.brush_at(w, i)
+            if b.selected {
+                val active: mut i32 = -1
+                if ui.drag_kind == c.DRAG_VERTEX && ui.drag_brush == i {
+                    active = ui.drag_vert
+                }
+                draw_vertices(b, active)
+            }
+            i++
+        }
+    }
+
+    draw_preview(ui)
+}

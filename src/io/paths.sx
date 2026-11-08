@@ -1,0 +1,80 @@
+val fs    = use("std/fs")
+val str   = use("../core/strutil.sx")
+val world = use("../map/world.sx")
+val mem   = use("../core/mem.sx")
+
+pub fn safe_name(w: mut ref world.World, dst: ref u8, cap: i32) void = {
+    str.sanitize(dst, cap, world.name(w))
+}
+
+pub fn export_dir(w: mut ref world.World, dst: ref u8, cap: i32) void = {
+    val safe: mut [64]u8 = @zeroed
+    safe_name(w, @addr(safe) as ref u8, 64)
+    @snprintf(dst, cap, "exports/{s}", {@addr(safe) as ref u8})
+}
+
+pub fn texture_dir(w: mut ref world.World, dst: ref u8, cap: i32) void = {
+    val safe: mut [64]u8 = @zeroed
+    safe_name(w, @addr(safe) as ref u8, 64)
+    @snprintf(dst, cap, "exports/{s}/textures", {@addr(safe) as ref u8})
+}
+
+pub fn export_file(w: mut ref world.World, dst: ref u8, cap: i32, filename: ref u8) void = {
+    val safe: mut [64]u8 = @zeroed
+    safe_name(w, @addr(safe) as ref u8, 64)
+    @snprintf(dst, cap, "exports/{s}/{s}", {@addr(safe) as ref u8, filename})
+}
+
+pub fn ensure_export(w: mut ref world.World) bool = trust {
+    fs.mkdir_path("exports")
+    val dir: mut [512]u8 = @zeroed
+    export_dir(w, @addr(dir) as ref u8, 512)
+    fs.mkdir_path(@addr(dir) as ref u8)
+    val tdir: mut [512]u8 = @zeroed
+    texture_dir(w, @addr(tdir) as ref u8, 512)
+    fs.mkdir_path(@addr(tdir) as ref u8)
+    val probe = fs.is_directory(@addr(dir) as ref u8)
+    return probe
+}
+
+pub fn copy_textures(w: mut ref world.World) bool = trust {
+    val tdir: mut [512]u8 = @zeroed
+    texture_dir(w, @addr(tdir) as ref u8, 512)
+    val good: mut bool = true
+    val i: mut i32 = 1
+    for {
+        if i >= w.texture_count {
+            break
+        }
+        val t = world.texture_at(w, i)
+        if t.path != none && @strlen(t.path) > 0 {
+            val base = str.basename(t.path)
+            val dst: mut [512]u8 = @zeroed
+            @snprintf(@addr(dst) as ref u8, 512, "{s}/{s}", {@addr(tdir) as ref u8, base})
+            val data = fs.read_all_raw(t.path)
+            match data {
+                some bytes => {
+                    val sz = fs.file_size(t.path)
+                    val n: mut i64 = 0
+                    match sz {
+                        some v => {
+                            n = v
+                        }
+                        none => {
+                            n = 0
+                        }
+                    }
+                    if !fs.write_all_bytes(@addr(dst) as ref u8, bytes as ref void, n) {
+                        good = false
+                    }
+                    mem.release(bytes as ref void)
+                }
+                none => {
+                    good = false
+                }
+            }
+        }
+        i++
+    }
+    return good
+}

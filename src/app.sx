@@ -1,0 +1,865 @@
+val sdl      = use("./platform/sdl.sx")
+val gl       = use("./platform/gl.sx")
+val window   = use("./platform/window.sx")
+val input    = use("./platform/input.sx")
+val camera   = use("./render/camera.sx")
+val renderer = use("./render/renderer.sx")
+val text     = use("./render/text.sx")
+val math     = use("./core/math.sx")
+val mem      = use("./core/mem.sx")
+val str      = use("./core/strutil.sx")
+val c        = use("./core/constants.sx")
+val world    = use("./map/world.sx")
+val brush    = use("./map/brush.sx")
+val texture  = use("./map/texture.sx")
+val uistate  = use("./ui/state.sx")
+val appui    = use("./ui/ui.sx")
+val project  = use("./io/project.sx")
+val exporter = use("./io/export.sx")
+val fs       = use("std/fs")
+val stdio    = use("std/stdio")
+
+type VertexHit = {
+    brush: mut i32
+    vert: mut i32
+    dist: mut f64
+    pos: mut math.Vec3
+}
+
+fn raypoint(ray: math.Ray, t: f64) math.Vec3 = {
+    return math.v3_add(ray.origin, math.v3_mul(ray.dir, t))
+}
+
+fn ground_point(ray: math.Ray) math.Vec3 = {
+    val t = math.ray_plane(ray, math.Plane{normal: math.v3(0.0, 0.0, 1.0), dist: 0.0})
+    if t < 0.0 {
+        return raypoint(ray, 200.0)
+    }
+    return raypoint(ray, t)
+}
+
+fn pick_vertex(
+    w: mut ref world.World,
+    cam: ref camera.Camera,
+    mx: i32,
+    my: i32,
+    width: i32,
+    height: i32
+) VertexHit = {
+    val best: mut VertexHit = VertexHit{
+        brush: -1,
+        vert: -1,
+        dist: 999.0,
+        pos: math.v3(0.0, 0.0, 0.0)
+    }
+    val i: mut i32 = 0
+    for {
+        if i >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = world.brush_at(w, i)
+        if b.selected && b.valid {
+            val k: mut i32 = 0
+            for {
+                if k >= b.vert_count {
+                    break
+                }
+                val p = brush.vert(b, k)
+                val sp = camera.project(cam, @deref(p), width, height)
+                if sp.depth > 0.05 {
+                    val dx = sp.x - mx as f64
+                    val dy = sp.y - my as f64
+                    val d = math.sqrt(dx * dx + dy * dy)
+                    if d < 12.0 && d < best.dist {
+                        best.brush = i
+                        best.vert = k
+                        best.dist = d
+                        best.pos = @deref(p)
+                    }
+                }
+                k++
+            }
+        }
+        i++
+    }
+    return best
+}
+
+fn nearest_vertex(b: mut ref brush.Brush, p: math.Vec3) i32 = {
+    val best: mut i32 = -1
+    val bd: mut f64 = 0.01
+    val i: mut i32 = 0
+    for {
+        if i >= b.vert_count {
+            break
+        }
+        val d = math.v3_dist(@deref(brush.vert(b, i)), p)
+        if d < bd {
+            bd = d
+            best = i
+        }
+        i++
+    }
+    return best
+}
+
+fn select_only(w: mut ref world.World, index: i32) void = {
+    world.deselect_all(w)
+    if index >= 0 && index < w.brush_count {
+        val b: mut ref brush.Brush = world.brush_at(w, index)
+        b.selected = true
+    }
+}
+
+pub fn commit_name(w: mut ref world.World, ui: mut ref uistate.UIState) void = {
+    appui.commit_name(w, ui)
+}
+
+fn update_preview(ui: mut ref uistate.UIState, a: math.Vec3, b: math.Vec3) void = {
+    val step = ui.grid
+    val x0 = math.snapf(a.x, step)
+    val y0 = math.snapf(a.y, step)
+    val x1 = math.snapf(b.x, step)
+    val y1 = math.snapf(b.y, step)
+    val minx = if_f64(x0 < x1, x0, x1)
+    val maxx = if_f64(x0 > x1, x0, x1)
+    val miny = if_f64(y0 < y1, y0, y1)
+    val maxy = if_f64(y0 > y1, y0, y1)
+    if math.fabs(maxx - minx) < 0.01 || math.fabs(maxy - miny) < 0.01 {
+        return
+    }
+    val lo = math.v3(minx, miny, 0.0)
+    val hi = math.v3(maxx, maxy, ui.height)
+    val tmp: mut brush.Brush = brush.from_box(lo, hi)
+    brush.copy(@addr(ui.preview), @addr(tmp))
+    brush.dispose(@addr(tmp))
+    ui.preview.tex = ui.active_tex
+    ui.preview_valid = true
+}
+
+fn if_f64(cond: bool, a: f64, b: f64) f64 = {
+    if cond {
+        return a
+    }
+    return b
+}
+
+fn add_drawn(w: mut ref world.World, ui: mut ref uistate.UIState) void = {
+    if !ui.preview_valid {
+        return
+    }
+    val idx = world.add_brush_copy(w, @addr(ui.preview))
+    if idx >= 0 {
+        select_only(w, idx)
+        uistate.set_status(ui, "Created brush {d}.", {idx})
+    }
+    ui.preview_valid = false
+}
+
+fn create_default_cube(
+    w: mut ref world.World,
+    ui: mut ref uistate.UIState,
+    center: math.Vec3
+) void = {
+    val g = ui.grid * 4.0
+    val cx = math.snapf(center.x, ui.grid)
+    val cy = math.snapf(center.y, ui.grid)
+    val tmp: mut brush.Brush = brush.from_box(
+        math.v3(cx - g, cy - g, 0.0),
+        math.v3(cx + g, cy + g, ui.height)
+    )
+    tmp.tex = ui.active_tex
+    val idx = world.add_brush_copy(w, @addr(tmp))
+    brush.dispose(@addr(tmp))
+    if idx >= 0 {
+        select_only(w, idx)
+        uistate.set_status(ui, "Created brush {d}.", {idx})
+    }
+}
+
+fn begin_extrude(
+    ui: mut ref uistate.UIState,
+    b: mut ref brush.Brush,
+    bi: i32,
+    fi: i32,
+    hitpoint: math.Vec3
+) void = {
+    ui.drag_kind = c.DRAG_FACE
+    ui.drag_brush = bi
+    ui.drag_face = fi
+    ui.drag_moved = false
+    ui.drag_start_world = hitpoint
+    uistate.save_original(ui, b)
+    val f = brush.face(b, fi)
+    ui.drag_face_dist = f.dist
+    ui.drag_target = f.dist
+    val n = f.normal
+    val lim: mut f64 = -1.0e30
+    val i: mut i32 = 0
+    for {
+        if i >= b.vert_count {
+            break
+        }
+        val p = brush.vert(b, i)
+        val d = math.v3_dot(n, @deref(p))
+        if math.fabs(d - f.dist) > 0.02 && d > lim {
+            lim = d
+        }
+        i++
+    }
+    ui.drag_limit = lim
+}
+
+fn begin_vertex(w: mut ref world.World, ui: mut ref uistate.UIState, hit: VertexHit) void = {
+    ui.drag_kind = c.DRAG_VERTEX
+    ui.drag_brush = hit.brush
+    ui.drag_vert = hit.vert
+    ui.drag_vert_pos = hit.pos
+    ui.drag_start_world = hit.pos
+    ui.drag_moved = false
+    val b: mut ref brush.Brush = world.brush_at(w, hit.brush)
+    uistate.save_original(ui, b)
+}
+
+fn begin_move(ui: mut ref uistate.UIState, bi: i32, start: math.Vec3) void = {
+    ui.drag_kind = c.DRAG_MOVE
+    ui.drag_brush = bi
+    ui.drag_start_world = start
+    ui.drag_last_delta = math.v3(0.0, 0.0, 0.0)
+    ui.drag_moved = false
+}
+
+fn viewport_down(
+    w: mut ref world.World,
+    cam: ref camera.Camera,
+    ui: mut ref uistate.UIState,
+    inp: ref input.Input,
+    width: i32,
+    height: i32
+) void = {
+    val ray = camera.screen_ray(cam, inp.mx, inp.my, width, height)
+
+    if ui.mode == c.MODE_VERTEX {
+        val vh = pick_vertex(w, cam, inp.mx, inp.my, width, height)
+        if vh.brush >= 0 {
+            val shift = inp.shift
+            if !shift {
+                begin_vertex(w, ui, vh)
+                return
+            }
+        }
+    }
+
+    val hit = world.raycast(w, ray)
+    if ui.mode == c.MODE_FACE {
+        ui.face_brush = hit.brush
+        ui.face_index = hit.face
+    }
+
+    if hit.brush >= 0 {
+        val b: mut ref brush.Brush = world.brush_at(w, hit.brush)
+        if inp.shift {
+            if !b.selected {
+                select_only(w, hit.brush)
+            }
+            begin_extrude(ui, b, hit.brush, hit.face, hit.point)
+            return
+        }
+        if inp.ctrl {
+            b.selected = !b.selected
+            ui.drag_kind = c.DRAG_NONE
+            return
+        }
+        if !b.selected {
+            select_only(w, hit.brush)
+        }
+        begin_move(ui, hit.brush, ground_point(ray))
+        return
+    }
+
+    if !inp.ctrl {
+        world.deselect_all(w)
+        ui.face_brush = -1
+        ui.face_index = -1
+    }
+
+    if ui.mode == c.MODE_BRUSH {
+        ui.drag_kind = c.DRAG_DRAW
+        ui.drag_start_world = ground_point(ray)
+        ui.drag_moved = false
+        ui.preview_valid = false
+    }
+}
+
+fn viewport_move(
+    w: mut ref world.World,
+    cam: ref camera.Camera,
+    ui: mut ref uistate.UIState,
+    inp: ref input.Input,
+    width: i32,
+    height: i32
+) void = {
+    val ray = camera.screen_ray(cam, inp.mx, inp.my, width, height)
+    if ui.drag_kind == c.DRAG_MOVE {
+        val p = ground_point(ray)
+        val dx = math.snapf(p.x - ui.drag_start_world.x, ui.grid)
+        val dz = math.snapf(p.y - ui.drag_start_world.y, ui.grid)
+        val delta = math.v3(dx, 0.0, dz)
+        val inc = math.v3_sub(delta, ui.drag_last_delta)
+        if math.v3_len_sq(inc) > 0.000001 {
+            world.nudge_selected(w, inc)
+            ui.drag_last_delta = delta
+            ui.drag_moved = true
+        }
+    } elif ui.drag_kind == c.DRAG_DRAW {
+        update_preview(ui, ui.drag_start_world, ground_point(ray))
+        if math.v3_dist(ui.drag_start_world, ground_point(ray)) > 0.5 {
+            ui.drag_moved = true
+        }
+    } elif ui.drag_kind == c.DRAG_FACE {
+        val b: mut ref brush.Brush = world.brush_at(w, ui.drag_brush)
+        if ui.drag_face >= 0 && ui.drag_face < b.face_count {
+            val f = brush.face(b, ui.drag_face)
+            val n = f.normal
+            val plane = math.Plane{normal: n, dist: ui.drag_face_dist}
+            val t = math.ray_plane(ray, plane)
+            if t > 0.0 {
+                val p = raypoint(ray, t)
+                val proj = math.snapf(math.v3_dot(math.v3_sub(p, ui.drag_start_world), n), ui.grid)
+                val target: mut f64 = ui.drag_face_dist + proj
+                if target < ui.drag_limit + 0.5 {
+                    target = ui.drag_limit + 0.5
+                }
+                val i: mut i32 = 0
+                for {
+                    if i >= b.face_count {
+                        break
+                    }
+                    val fq: mut ref math.Plane = brush.face(b, i)
+                    if i == ui.drag_face {
+                        fq.dist = target
+                    } else {
+                        fq.dist = mem.f64_at(@addr(ui.drag_orig) as ref void, i)
+                    }
+                    i++
+                }
+                brush.rebuild(b)
+                if b.valid {
+                    ui.drag_target = target
+                    ui.drag_moved = true
+                } else {
+                    i = 0
+                    for {
+                        if i >= b.face_count {
+                            break
+                        }
+                        val fq: mut ref math.Plane = brush.face(b, i)
+                        fq.dist = mem.f64_at(@addr(ui.drag_orig) as ref void, i)
+                        i++
+                    }
+                    brush.rebuild(b)
+                }
+            }
+        }
+    } elif ui.drag_kind == c.DRAG_VERTEX {
+        val b: mut ref brush.Brush = world.brush_at(w, ui.drag_brush)
+        val n = camera.forward(cam)
+        val plane = math.Plane{normal: n, dist: math.v3_dot(n, ui.drag_start_world)}
+        val t = math.ray_plane(ray, plane)
+        if t > 0.0 {
+            val p = raypoint(ray, t)
+            val dx = math.snapf(p.x - ui.drag_start_world.x, ui.grid)
+            val dy = math.snapf(p.y - ui.drag_start_world.y, ui.grid)
+            val dz = math.snapf(p.z - ui.drag_start_world.z, ui.grid)
+            val newpos = math.v3_add(ui.drag_start_world, math.v3(dx, dy, dz))
+            val i: mut i32 = 0
+            for {
+                if i >= b.face_count {
+                    break
+                }
+                val fq: mut ref math.Plane = brush.face(b, i)
+                val orig = mem.f64_at(@addr(ui.drag_orig) as ref void, i)
+                if math.fabs(math.v3_dot(fq.normal, ui.drag_start_world) - orig) < 0.02 {
+                    fq.dist = math.v3_dot(fq.normal, newpos)
+                } else {
+                    fq.dist = orig
+                }
+                i++
+            }
+            brush.rebuild(b)
+            if b.valid {
+                ui.drag_vert_pos = newpos
+                val ni = nearest_vertex(b, newpos)
+                if ni >= 0 {
+                    ui.drag_vert = ni
+                }
+                ui.drag_moved = true
+            } else {
+                i = 0
+                for {
+                    if i >= b.face_count {
+                        break
+                    }
+                    val fq: mut ref math.Plane = brush.face(b, i)
+                    fq.dist = mem.f64_at(@addr(ui.drag_orig) as ref void, i)
+                    i++
+                }
+                brush.rebuild(b)
+            }
+        }
+    }
+
+    // hover feedback
+    if ui.drag_kind == c.DRAG_NONE {
+        val hit = world.raycast(w, ray)
+        ui.hover_brush = hit.brush
+        ui.hover_face = hit.face
+    }
+}
+
+fn viewport_up(w: mut ref world.World, ui: mut ref uistate.UIState) void = {
+    if ui.drag_kind == c.DRAG_DRAW {
+        if ui.drag_moved && ui.preview_valid {
+            add_drawn(w, ui)
+        } else {
+            create_default_cube(w, ui, ui.drag_start_world)
+        }
+    } elif ui.drag_kind == c.DRAG_FACE {
+        if ui.drag_face >= 0 && ui.drag_brush >= 0 && ui.drag_brush < w.brush_count {
+            val b = world.brush_at(w, ui.drag_brush)
+            uistate.set_status(ui, "Face adjusted. Brush volume {d}.", {b.volume as i32})
+        }
+    }
+    uistate.cancel_drag(ui)
+}
+
+fn adjust_grid(ui: mut ref uistate.UIState, up: bool) void = {
+    if up {
+        if ui.grid < 256.0 {
+            ui.grid = ui.grid * 2.0
+        }
+    } else {
+        if ui.grid > 1.0 {
+            ui.grid = ui.grid / 2.0
+        }
+    }
+}
+
+fn nudge(w: mut ref world.World, ui: ref uistate.UIState, axis: i32, dir: f64, big: bool) void = {
+    val mult: mut f64 = 1.0
+    if big {
+        mult = 8.0
+    }
+    val d: mut math.Vec3 = math.v3(0.0, 0.0, 0.0)
+    if axis == 0 {
+        d.x = ui.grid * dir * mult
+    } elif axis == 1 {
+        d.y = ui.grid * dir * mult
+    } else {
+        d.z = ui.grid * dir * mult
+    }
+    world.nudge_selected(w, d)
+}
+
+fn append_name_char(w: mut ref world.World, ch: u8) void = {
+    val n = @strlen(world.name(w))
+    if n < 63 && ch >= 32 && ch < 127 {
+        mem.set_u8(world.name_ptr(w), n as i32, ch)
+        mem.set_u8(world.name_ptr(w), n as i32 + 1, 0)
+    }
+}
+
+fn delete_name_char(w: mut ref world.World) void = {
+    val n = @strlen(world.name(w))
+    if n > 0 {
+        mem.set_u8(world.name_ptr(w), n as i32 - 1, 0)
+    }
+}
+
+fn handle_key(
+    w: mut ref world.World,
+    cam: mut ref camera.Camera,
+    ui: mut ref uistate.UIState,
+    sym: i32,
+    mods: u16,
+    running: mut ref bool
+) void = trust {
+    val shift = (mods & 3) != 0
+    val ctrl = (mods & 0xC0) != 0
+
+    if ui.editing_name {
+        if sym == input.KEY_BACKSPACE {
+            delete_name_char(w)
+            return
+        }
+        if sym == input.KEY_RETURN {
+            commit_name(w, ui)
+            return
+        }
+        if sym == input.KEY_ESC {
+            ui.editing_name = false
+            return
+        }
+    }
+
+    if ctrl && (sym == input.KEY_S || sym == 115) {
+        fs.mkdir_path("projects")
+        if project.save(w, cam, ui) {
+            uistate.set_status(ui, "Saved projects/{s}.sm", {world.name(w)})
+        } else {
+            uistate.set_status(ui, "Save failed.", {})
+        }
+        return
+    }
+    if ctrl && sym == input.KEY_O {
+        if project.load(w, cam, ui) {
+            uistate.set_status(ui, "Loaded projects/{s}.sm", {world.name(w)})
+        } else {
+            uistate.set_status(ui, "No saved project named {s}.", {world.name(w)})
+        }
+        return
+    }
+    if ctrl && sym == input.KEY_E {
+        if exporter.export_all(w) {
+            uistate.set_status(ui, "Exported all formats to exports/{s}/", {world.name(w)})
+        } else {
+            uistate.set_status(ui, "Export failed.", {})
+        }
+        return
+    }
+    if ctrl && sym == input.KEY_A {
+        world.select_all(w)
+        uistate.set_status(ui, "Selected all brushes.", {})
+        return
+    }
+    if ctrl && sym == input.KEY_H {
+        val made = world.hollow_selected(w, ui.wall)
+        if made > 0 {
+            uistate.set_status(ui, "Hollow created {d} brushes.", {made})
+        } else {
+            uistate.set_status(ui, "Select a brush before hollowing.", {})
+        }
+        return
+    }
+    if ctrl && sym == input.KEY_Q {
+        @deref(running) = false
+        return
+    }
+    if ctrl {
+        return
+    }
+
+    if sym == input.KEY_ESC {
+        if ui.drag_kind != c.DRAG_NONE {
+            uistate.cancel_drag(ui)
+        } else {
+            world.deselect_all(w)
+            ui.face_brush = -1
+            ui.face_index = -1
+        }
+        return
+    }
+    if sym == input.KEY_DELETE || sym == input.KEY_BACKSPACE {
+        val removed = world.delete_selected(w)
+        if removed > 0 {
+            uistate.set_status(ui, "Deleted {d} brushes.", {removed})
+        }
+        return
+    }
+    if sym == input.KEY_1 {
+        ui.mode = c.MODE_BRUSH
+        return
+    }
+    if sym == input.KEY_2 {
+        ui.mode = c.MODE_FACE
+        return
+    }
+    if sym == input.KEY_3 || sym == input.KEY_V {
+        if ui.mode == c.MODE_VERTEX && sym == input.KEY_V {
+            ui.mode = c.MODE_BRUSH
+        } else {
+            ui.mode = c.MODE_VERTEX
+            uistate.set_status(ui, "Vertex mode: drag a point of a selected brush.", {})
+        }
+        return
+    }
+    if sym == input.KEY_LEFT {
+        nudge(w, ui, 0, -1.0, shift)
+        return
+    }
+    if sym == input.KEY_RIGHT {
+        nudge(w, ui, 0, 1.0, shift)
+        return
+    }
+    if sym == input.KEY_UP {
+        nudge(w, ui, 1, 1.0, shift)
+        return
+    }
+    if sym == input.KEY_DOWN {
+        nudge(w, ui, 1, -1.0, shift)
+        return
+    }
+    if sym == input.KEY_PAGEUP {
+        nudge(w, ui, 2, 1.0, shift)
+        return
+    }
+    if sym == input.KEY_PAGEDOWN {
+        nudge(w, ui, 2, -1.0, shift)
+        return
+    }
+    if sym == 91 {
+        adjust_grid(ui, false)
+        return
+    }
+    if sym == 93 {
+        adjust_grid(ui, true)
+        return
+    }
+    if sym == input.KEY_F1 {
+        ui.help_visible = !ui.help_visible
+        return
+    }
+}
+
+fn process_events(
+    ev: ref void,
+    inp: mut ref input.Input,
+    w: mut ref world.World,
+    cam: mut ref camera.Camera,
+    ui: mut ref uistate.UIState,
+    running: mut ref bool,
+    width: i32,
+    height: i32
+) void = trust {
+    for {
+        if sdl.SDL_PollEvent(ev) == 0 {
+            break
+        }
+        val typ = mem.i32_off(ev, 0)
+        if typ == sdl.SDL_QUIT {
+            @deref(running) = false
+        } elif typ == sdl.SDL_KEYDOWN {
+            val state = mem.u8_at(ev, 12)
+            val repeat = mem.u8_at(ev, 13)
+            val sym = mem.i32_off(ev, 20)
+            val mods = mem.u16_off(ev, 24)
+            if state == sdl.SDL_PRESSED && repeat == 0 {
+                handle_key(w, cam, ui, sym, mods, running)
+            }
+        } elif typ == sdl.SDL_TEXTINPUT {
+            if ui.editing_name {
+                val p = mem.ptr_off(ev, 8) as ref u8
+                val n = @strlen(p)
+                val i: mut i64 = 0
+                for {
+                    if i >= n {
+                        break
+                    }
+                    append_name_char(w, mem.u8_at(p, i as i32))
+                    i++
+                }
+            }
+        } elif typ == sdl.SDL_MOUSEMOTION {
+            val x = mem.i32_off(ev, 20)
+            val y = mem.i32_off(ev, 24)
+            val xrel = mem.i32_off(ev, 28)
+            val yrel = mem.i32_off(ev, 32)
+            inp.mx = x
+            inp.my = y
+            inp.dx += xrel
+            inp.dy += yrel
+            if ui.drag_kind == c.DRAG_LOOK {
+                camera.look(cam, xrel as f64, yrel as f64)
+            } elif ui.drag_kind == c.DRAG_PAN {
+                camera.pan(cam, xrel as f64, yrel as f64)
+            } else {
+                if ui.drag_kind != c.DRAG_NONE {
+                    viewport_move(w, cam, ui, inp, width, height)
+                }
+            }
+        } elif typ == sdl.SDL_MOUSEBUTTONDOWN {
+            val button = mem.u8_at(ev, 16)
+            val x = mem.i32_off(ev, 20)
+            val y = mem.i32_off(ev, 24)
+            inp.mx = x
+            inp.my = y
+            if button == sdl.SDL_BUTTON_RIGHT {
+                inp.right = true
+                inp.clicked_right = true
+                if !appui.over_ui(x, y, width, height) {
+                    ui.drag_kind = c.DRAG_LOOK
+                    sdl.SDL_SetRelativeMouseMode(1)
+                }
+            } elif button == sdl.SDL_BUTTON_MIDDLE {
+                inp.middle = true
+                if !appui.over_ui(x, y, width, height) {
+                    ui.drag_kind = c.DRAG_PAN
+                }
+            } elif button == sdl.SDL_BUTTON_LEFT {
+                inp.left = true
+                inp.clicked_left = true
+                if !appui.over_ui(x, y, width, height) {
+                    viewport_down(w, cam, ui, inp, width, height)
+                }
+            }
+        } elif typ == sdl.SDL_MOUSEBUTTONUP {
+            val button = mem.u8_at(ev, 16)
+            val x = mem.i32_off(ev, 20)
+            val y = mem.i32_off(ev, 24)
+            inp.mx = x
+            inp.my = y
+            if button == sdl.SDL_BUTTON_RIGHT {
+                inp.right = false
+                inp.released_right = true
+                sdl.SDL_SetRelativeMouseMode(0)
+                if ui.drag_kind == c.DRAG_LOOK {
+                    ui.drag_kind = c.DRAG_NONE
+                }
+            } elif button == sdl.SDL_BUTTON_MIDDLE {
+                inp.middle = false
+                if ui.drag_kind == c.DRAG_PAN {
+                    ui.drag_kind = c.DRAG_NONE
+                }
+            } elif button == sdl.SDL_BUTTON_LEFT {
+                inp.left = false
+                inp.released_left = true
+                if !appui.over_ui(x, y, width, height) {
+                    if ui.drag_kind != c.DRAG_LOOK && ui.drag_kind != c.DRAG_PAN {
+                        viewport_up(w, ui)
+                    }
+                }
+            }
+        } elif typ == sdl.SDL_MOUSEWHEEL {
+            val wheel = mem.i32_off(ev, 20)
+            inp.wheel = wheel
+            if appui.over_ui(inp.mx, inp.my, width, height) {
+                if inp.mx < c.LEFT_PANEL_W && inp.my > c.TOP_BAR_H {
+                    ui.texture_scroll = ui.texture_scroll - wheel as f64 * 48.0
+                    if ui.texture_scroll < 0.0 {
+                        ui.texture_scroll = 0.0
+                    }
+                } else {
+                    adjust_grid(ui, wheel > 0)
+                }
+            } else {
+                adjust_grid(ui, wheel > 0)
+            }
+        } elif typ == sdl.SDL_DROPFILE {
+            val ptr = mem.ptr_off(ev, 8) as ref u8
+            if ptr != none && str.is_image(ptr) {
+                val t = texture.import_file(ptr, "textures")
+                if t.live {
+                    val idx = world.add_texture(w, t)
+                    if idx >= 0 {
+                        ui.active_tex = idx
+                        uistate.set_status(ui, "Imported texture {s}.", {t.name})
+                    }
+                } else {
+                    uistate.set_status(ui, "Could not import texture.", {})
+                }
+                sdl.SDL_free(ptr as ref void)
+            }
+        }
+    }
+}
+
+pub fn run() i32 = trust {
+    val win: mut window.Window = window.create("sunmap", 1440, 880)
+    if win.handle == none {
+        return 1
+    }
+    renderer.init()
+    val base = window.base_path()
+    text.init(base)
+    stdio.print("sunmap: OpenGL {s}\n", {window.gl_string(gl.GL_VERSION)})
+
+    fs.mkdir_path("textures")
+    fs.mkdir_path("projects")
+    fs.mkdir_path("exports")
+
+    val w: mut ref world.World = world.create()
+    val cam: mut ref camera.Camera = @alloc(@sizeof(camera.Camera)) as ref camera.Camera
+    val cam_val: mut camera.Camera = camera.create()
+    mem.mem_copy(cam as ref void, @addr(cam_val) as ref void, @sizeof(camera.Camera) as i64)
+    val ui: mut ref uistate.UIState = uistate.create()
+
+    world.load_textures(w, "textures")
+
+    val inp: mut ref input.Input = @alloc(@sizeof(input.Input)) as ref input.Input
+    mem.zero(inp as ref void, @sizeof(input.Input) as i64)
+    inp.left = false
+    val ev = @alloc(64)
+    val running: mut bool = true
+    val last_ticks: mut u32 = sdl.SDL_GetTicks()
+
+    for {
+        if !running {
+            break
+        }
+        input.begin_frame(inp)
+        inp.clicked_left = false
+        inp.released_left = false
+        inp.clicked_right = false
+        inp.released_right = false
+
+        window.resize(@addr(win))
+        val width = win.width
+        val height = win.height
+        if width <= 0 || height <= 0 {
+            sdl.SDL_Delay(16)
+        } else {
+            process_events(ev, inp, w, cam, ui, @addr(running), width, height)
+
+            val now = sdl.SDL_GetTicks()
+            val dticks = now - last_ticks
+            val dt = dticks as f64 / 1000.0
+            last_ticks = now
+
+            // camera noclip
+            if !ui.editing_name {
+                val fwd = input.key_down(input.SCAN_W)
+                val back = input.key_down(input.SCAN_S)
+                val left = input.key_down(input.SCAN_A)
+                val right = input.key_down(input.SCAN_D)
+                val up = input.key_down(input.SCAN_E)
+                val down = input.key_down(input.SCAN_Q)
+                val fast = input.key_down(input.SCAN_LSHIFT) || input.key_down(input.SCAN_RSHIFT)
+                camera.update(cam, dt, fwd, back, left, right, up, down, fast)
+            }
+
+            // status fade
+            if ui.status_time > 0.0 {
+                ui.status_time = ui.status_time - dt
+            }
+
+            // hover
+            if ui.drag_kind == c.DRAG_NONE && !appui.over_ui(inp.mx, inp.my, width, height) {
+                val ray = camera.screen_ray(cam, inp.mx, inp.my, width, height)
+                val hit = world.raycast(w, ray)
+                ui.hover_brush = hit.brush
+                ui.hover_face = hit.face
+            } else {
+                ui.hover_brush = -1
+                ui.hover_face = -1
+            }
+
+            renderer.begin_3d(cam, width, height)
+            renderer.draw_grid(ui.grid)
+            renderer.draw_world(w, ui)
+            appui.draw(w, cam, ui, inp, width, height)
+            window.swap(win)
+        }
+        input.end_frame(inp)
+    }
+
+    text.shutdown()
+    uistate.destroy(ui)
+    world.clear_all(w)
+    mem.release(w as ref void)
+    window.destroy(win)
+    return 0
+}
+
+pub fn main_entry() i32 = trust {
+    return run()
+}

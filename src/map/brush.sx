@@ -1,0 +1,643 @@
+val math = use("../core/math.sx")
+val mem  = use("../core/mem.sx")
+
+pub val MAX_FACES: i32 = 32
+pub val MAX_VERTS: i32 = 192
+
+pub type Brush = {
+    face_count: mut i32
+    faces: mut ref math.Plane
+    vert_count: mut i32
+    verts: mut ref math.Vec3
+    order_start: mut ref i32
+    order_len: mut ref i32
+    order: mut ref i32
+    tex: mut i32
+    selected: mut bool
+    valid: mut bool
+    min: mut math.Vec3
+    max: mut math.Vec3
+    volume: mut f64
+}
+
+pub fn init(b: mut ref Brush) void = {
+    b.face_count = 0
+    b.vert_count = 0
+    b.tex = -1
+    b.selected = false
+    b.valid = false
+    b.volume = 0.0
+    b.min = math.v3(0.0, 0.0, 0.0)
+    b.max = math.v3(0.0, 0.0, 0.0)
+    if b.faces == none {
+        b.faces = mem.allocate(MAX_FACES as i64 * @sizeof(math.Plane) as i64) as ref math.Plane
+    }
+    if b.verts == none {
+        b.verts = mem.allocate(MAX_VERTS as i64 * @sizeof(math.Vec3) as i64) as ref math.Vec3
+    }
+    if b.order_start == none {
+        b.order_start = mem.allocate(MAX_FACES as i64 * 4) as ref i32
+    }
+    if b.order_len == none {
+        b.order_len = mem.allocate(MAX_FACES as i64 * 4) as ref i32
+    }
+    if b.order == none {
+        b.order = mem.allocate(MAX_VERTS as i64 * 4) as ref i32
+    }
+}
+
+pub fn dispose(b: mut ref Brush) void = {
+    if b.faces != none {
+        mem.release(b.faces as ref void)
+        b.faces = none
+    }
+    if b.verts != none {
+        mem.release(b.verts as ref void)
+        b.verts = none
+    }
+    if b.order_start != none {
+        mem.release(b.order_start as ref void)
+        b.order_start = none
+    }
+    if b.order_len != none {
+        mem.release(b.order_len as ref void)
+        b.order_len = none
+    }
+    if b.order != none {
+        mem.release(b.order as ref void)
+        b.order = none
+    }
+}
+
+pub fn clear(b: mut ref Brush) void = {
+    dispose(b)
+    init(b)
+}
+
+pub fn copy(dst: mut ref Brush, src: ref Brush) void = {
+    if dst.faces == none {
+        init(dst)
+    }
+    dst.face_count = src.face_count
+    dst.vert_count = src.vert_count
+    dst.tex = src.tex
+    dst.selected = src.selected
+    dst.valid = src.valid
+    dst.min = src.min
+    dst.max = src.max
+    dst.volume = src.volume
+    mem.mem_copy(
+        dst.faces as ref void,
+        src.faces as ref void,
+        MAX_FACES as i64 * @sizeof(math.Plane) as i64
+    )
+    mem.mem_copy(
+        dst.verts as ref void,
+        src.verts as ref void,
+        MAX_VERTS as i64 * @sizeof(math.Vec3) as i64
+    )
+    mem.mem_copy(dst.order_start as ref void, src.order_start as ref void, MAX_FACES as i64 * 4)
+    mem.mem_copy(dst.order_len as ref void, src.order_len as ref void, MAX_FACES as i64 * 4)
+    mem.mem_copy(dst.order as ref void, src.order as ref void, MAX_VERTS as i64 * 4)
+}
+
+pub fn face(b: mut ref Brush, i: i32) ref math.Plane = {
+    return mem.ptr(b.faces as ref void, i as i64 * @sizeof(math.Plane) as i64) as ref math.Plane
+}
+
+pub fn vert(b: mut ref Brush, i: i32) ref math.Vec3 = {
+    return mem.ptr(b.verts as ref void, i as i64 * @sizeof(math.Vec3) as i64) as ref math.Vec3
+}
+
+pub fn order_at(b: mut ref Brush, i: i32) i32 = {
+    return mem.i32_at(b.order as ref void, i)
+}
+
+pub fn set_order(b: mut ref Brush, i: i32, value: i32) void = {
+    mem.set_i32(b.order as ref void, i, value)
+}
+
+pub fn order_start(b: mut ref Brush, i: i32) i32 = {
+    return mem.i32_at(b.order_start as ref void, i)
+}
+
+pub fn set_order_start(b: mut ref Brush, i: i32, value: i32) void = {
+    mem.set_i32(b.order_start as ref void, i, value)
+}
+
+pub fn order_len(b: mut ref Brush, i: i32) i32 = {
+    return mem.i32_at(b.order_len as ref void, i)
+}
+
+pub fn set_order_len(b: mut ref Brush, i: i32, value: i32) void = {
+    mem.set_i32(b.order_len as ref void, i, value)
+}
+
+pub fn add_plane(b: mut ref Brush, n: math.Vec3, d: f64) bool = {
+    if b.face_count >= MAX_FACES {
+        return false
+    }
+    val i: mut i32 = 0
+    for {
+        if i >= b.face_count {
+            break
+        }
+        val f = face(b, i)
+        if math.v3_dot(f.normal, n) > 0.99999 && math.fabs(f.dist - d) < 0.0001 {
+            return true
+        }
+        i++
+    }
+    val f: mut ref math.Plane = face(b, b.face_count)
+    f.normal = n
+    f.dist = d
+    b.face_count++
+    return true
+}
+
+pub fn from_box(min: math.Vec3, max: math.Vec3) Brush = {
+    val b: mut Brush = Brush{}
+    mem.zero(@addr(b) as ref void, @sizeof(Brush) as i64)
+    init(@addr(b))
+    add_plane(@addr(b), math.v3(1.0, 0.0, 0.0), max.x)
+    add_plane(@addr(b), math.v3(-1.0, 0.0, 0.0), -min.x)
+    add_plane(@addr(b), math.v3(0.0, 1.0, 0.0), max.y)
+    add_plane(@addr(b), math.v3(0.0, -1.0, 0.0), -min.y)
+    add_plane(@addr(b), math.v3(0.0, 0.0, 1.0), max.z)
+    add_plane(@addr(b), math.v3(0.0, 0.0, -1.0), -min.z)
+    rebuild(@addr(b))
+    return b
+}
+
+fn add_unique_vertex(b: mut ref Brush, p: math.Vec3) void = {
+    if b.vert_count >= MAX_VERTS {
+        return
+    }
+    val i: mut i32 = 0
+    for {
+        if i >= b.vert_count {
+            break
+        }
+        val v = vert(b, i)
+        if math.v3_dist(@deref(v), p) < 0.01 {
+            return
+        }
+        i++
+    }
+    val v: mut ref math.Vec3 = vert(b, b.vert_count)
+    v.x = p.x
+    v.y = p.y
+    v.z = p.z
+    b.vert_count++
+}
+
+fn inside_all(b: mut ref Brush, p: math.Vec3) bool = {
+    val i: mut i32 = 0
+    for {
+        if i >= b.face_count {
+            break
+        }
+        val f = face(b, i)
+        if math.v3_dot(f.normal, p) - f.dist > 0.02 {
+            return false
+        }
+        i++
+    }
+    return true
+}
+
+fn intersect_planes(
+    a: ref math.Plane,
+    b2: ref math.Plane,
+    cp: ref math.Plane,
+    out: mut ref math.Vec3
+) bool = {
+    val n1 = a.normal
+    val n2 = b2.normal
+    val n3 = cp.normal
+    val cross23 = math.v3_cross(n2, n3)
+    val det = math.v3_dot(n1, cross23)
+    if math.fabs(det) < 0.00000001 {
+        return false
+    }
+    val p = math.v3_add(
+        math.v3_mul(cross23, a.dist),
+        math.v3_add(
+            math.v3_mul(math.v3_cross(n3, n1), b2.dist),
+            math.v3_mul(math.v3_cross(n1, n2), cp.dist)
+        )
+    )
+    val r = math.v3_mul(p, 1.0 / det)
+    out.x = r.x
+    out.y = r.y
+    out.z = r.z
+    return true
+}
+
+pub fn rebuild(b: mut ref Brush) void = {
+    b.vert_count = 0
+    b.volume = 0.0
+    b.valid = false
+    if b.face_count < 4 {
+        return
+    }
+
+    val i: mut i32 = 0
+    for {
+        if i >= b.face_count - 2 {
+            break
+        }
+        val j: mut i32 = i + 1
+        for {
+            if j >= b.face_count - 1 {
+                break
+            }
+            val k: mut i32 = j + 1
+            for {
+                if k >= b.face_count {
+                    break
+                }
+                val p: mut math.Vec3 = math.v3(0.0, 0.0, 0.0)
+                if intersect_planes(face(b, i), face(b, j), face(b, k), @addr(p)) {
+                    if inside_all(b, p) {
+                        add_unique_vertex(b, p)
+                    }
+                }
+                k++
+            }
+            j++
+        }
+        i++
+    }
+
+    if b.vert_count < 4 {
+        return
+    }
+
+    val first_vert = vert(b, 0)
+    val mn: mut math.Vec3 = math.v3(first_vert.x, first_vert.y, first_vert.z)
+    val mx: mut math.Vec3 = math.v3(first_vert.x, first_vert.y, first_vert.z)
+    val vi: mut i32 = 1
+    for {
+        if vi >= b.vert_count {
+            break
+        }
+        val v = vert(b, vi)
+        if v.x < mn.x {
+            mn.x = v.x
+        }
+        if v.y < mn.y {
+            mn.y = v.y
+        }
+        if v.z < mn.z {
+            mn.z = v.z
+        }
+        if v.x > mx.x {
+            mx.x = v.x
+        }
+        if v.y > mx.y {
+            mx.y = v.y
+        }
+        if v.z > mx.z {
+            mx.z = v.z
+        }
+        vi++
+    }
+    b.min = mn
+    b.max = mx
+
+    val center: mut math.Vec3 = math.v3(0.0, 0.0, 0.0)
+    vi = 0
+    for {
+        if vi >= b.vert_count {
+            break
+        }
+        center = math.v3_add(center, @deref(vert(b, vi)))
+        vi++
+    }
+    center = math.v3_mul(center, 1.0 / b.vert_count as f64)
+
+    // Remove redundant planes (a plane that no longer contributes a face).
+    val counts: mut [32]i32 = @zeroed
+    val redundant: mut bool = false
+    val scan: mut i32 = 0
+    for {
+        if scan >= b.face_count {
+            break
+        }
+        val f = face(b, scan)
+        val n: mut i32 = 0
+        vi = 0
+        for {
+            if vi >= b.vert_count {
+                break
+            }
+            val p = vert(b, vi)
+            if math.fabs(math.v3_dot(f.normal, @deref(p)) - f.dist) < 0.02 {
+                n++
+            }
+            vi++
+        }
+        mem.set_i32(@addr(counts) as ref void, scan, n)
+        if n < 3 {
+            redundant = true
+        }
+        scan++
+    }
+
+    if redundant {
+        val write: mut i32 = 0
+        val read: mut i32 = 0
+        for {
+            if read >= b.face_count {
+                break
+            }
+            if mem.i32_at(@addr(counts) as ref void, read) >= 3 {
+                if write != read {
+                    val dst: mut ref math.Plane = face(b, write)
+                    val src = face(b, read)
+                    dst.normal = src.normal
+                    dst.dist = src.dist
+                }
+                write++
+            }
+            read++
+        }
+        b.face_count = write
+        rebuild(b)
+        return
+    }
+
+    val cursor: mut i32 = 0
+    val fi: mut i32 = 0
+    for {
+        if fi >= b.face_count {
+            break
+        }
+        val f = face(b, fi)
+        val u = math.tangent_for_normal(f.normal)
+        val v = math.bitangent_for_normal(f.normal, u)
+
+        val tmp: mut [192]i32 = @zeroed
+        val angles: mut [192]f64 = @zeroed
+        val count: mut i32 = 0
+        vi = 0
+        for {
+            if vi >= b.vert_count {
+                break
+            }
+            val p = vert(b, vi)
+            if math.fabs(math.v3_dot(f.normal, @deref(p)) - f.dist) < 0.02 {
+                val d = math.v3_sub(@deref(p), center)
+                mem.set_i32(@addr(tmp) as ref void, count, vi)
+                mem.set_f64(
+                    @addr(angles) as ref void,
+                    count,
+                    math.atan2(math.v3_dot(d, v), math.v3_dot(d, u))
+                )
+                count++
+            }
+            vi++
+        }
+        if count < 3 {
+            return
+        }
+        val a: mut i32 = 1
+        for {
+            if a >= count {
+                break
+            }
+            val key_idx = mem.i32_at(@addr(tmp) as ref void, a)
+            val key_ang = mem.f64_at(@addr(angles) as ref void, a)
+            val pos: mut i32 = a - 1
+            for {
+                if pos < 0 {
+                    break
+                }
+                val prev_ang = mem.f64_at(@addr(angles) as ref void, pos)
+                if prev_ang <= key_ang {
+                    break
+                }
+                mem.set_i32(
+                    @addr(tmp) as ref void,
+                    pos + 1,
+                    mem.i32_at(@addr(tmp) as ref void, pos)
+                )
+                mem.set_f64(@addr(angles) as ref void, pos + 1, prev_ang)
+                pos--
+            }
+            mem.set_i32(@addr(tmp) as ref void, pos + 1, key_idx)
+            mem.set_f64(@addr(angles) as ref void, pos + 1, key_ang)
+            a++
+        }
+
+        set_order_start(b, fi, cursor)
+        set_order_len(b, fi, count)
+        val k: mut i32 = 0
+        for {
+            if k >= count {
+                break
+            }
+            set_order(b, cursor, mem.i32_at(@addr(tmp) as ref void, k))
+            cursor++
+            k++
+        }
+
+        if count >= 3 {
+            val v0 = @deref(vert(b, order_at(b, order_start(b, fi))))
+            val t: mut i32 = 1
+            for {
+                if t >= count - 1 {
+                    break
+                }
+                val v1 = @deref(vert(b, order_at(b, order_start(b, fi) + t)))
+                val v2 = @deref(vert(b, order_at(b, order_start(b, fi) + t + 1)))
+                val e1 = math.v3_sub(v0, center)
+                val e2 = math.v3_sub(v1, center)
+                val e3 = math.v3_sub(v2, center)
+                b.volume += math.v3_dot(e1, math.v3_cross(e2, e3)) / 6.0
+                t++
+            }
+        }
+        fi++
+    }
+
+    b.volume = math.fabs(b.volume)
+    b.valid = b.volume > 0.01
+}
+
+pub fn face_vert_index(b: mut ref Brush, fi: i32, k: i32) i32 = {
+    return order_at(b, order_start(b, fi) + k)
+}
+
+pub fn face_vert(b: mut ref Brush, fi: i32, k: i32) math.Vec3 = {
+    return @deref(vert(b, face_vert_index(b, fi, k)))
+}
+
+pub fn face_center(b: mut ref Brush, fi: i32) math.Vec3 = {
+    val n = order_len(b, fi)
+    val center: mut math.Vec3 = math.v3(0.0, 0.0, 0.0)
+    val i: mut i32 = 0
+    for {
+        if i >= n {
+            break
+        }
+        center = math.v3_add(center, face_vert(b, fi, i))
+        i++
+    }
+    if n > 0 {
+        center = math.v3_mul(center, 1.0 / n as f64)
+    }
+    return center
+}
+
+pub fn translate(b: mut ref Brush, delta: math.Vec3) void = {
+    val i: mut i32 = 0
+    for {
+        if i >= b.face_count {
+            break
+        }
+        val f: mut ref math.Plane = face(b, i)
+        f.dist = f.dist + math.v3_dot(f.normal, delta)
+        i++
+    }
+    rebuild(b)
+}
+
+pub fn apply_original(b: mut ref Brush, original: ref void, delta: math.Vec3) void = {
+    val i: mut i32 = 0
+    for {
+        if i >= b.face_count {
+            break
+        }
+        val f: mut ref math.Plane = face(b, i)
+        f.dist = mem.f64_at(original, i) + math.v3_dot(f.normal, delta)
+        i++
+    }
+    rebuild(b)
+}
+
+pub fn face_uv(f: ref math.Plane, p: math.Vec3, tex_w: f64, tex_h: f64) math.Vec2 = {
+    val u = math.tangent_for_normal(f.normal)
+    val v = math.bitangent_for_normal(f.normal, u)
+    return math.v2(
+        math.v3_dot(p, u) / tex_w,
+        math.v3_dot(p, v) / tex_h
+    )
+}
+
+fn point_in_face(b: mut ref Brush, fi: i32, p: math.Vec3) bool = {
+    val f = face(b, fi)
+    val u = math.tangent_for_normal(f.normal)
+    val v = math.bitangent_for_normal(f.normal, u)
+    val origin_v = face_vert(b, fi, 0)
+    val n = order_len(b, fi)
+    val i: mut i32 = 0
+    for {
+        if i >= n {
+            break
+        }
+        val a = math.v3_sub(face_vert(b, fi, i), origin_v)
+        val b2 = math.v3_sub(face_vert(b, fi, (i + 1) % n), origin_v)
+        val pv = math.v3_sub(p, origin_v)
+        val ax = math.v3_dot(a, u)
+        val ay = math.v3_dot(a, v)
+        val bx = math.v3_dot(b2, u)
+        val by = math.v3_dot(b2, v)
+        val px = math.v3_dot(pv, u)
+        val py = math.v3_dot(pv, v)
+        val cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax)
+        if cross < -0.02 {
+            return false
+        }
+        i++
+    }
+    return true
+}
+
+pub fn raycast(b: mut ref Brush, ray: math.Ray, out_face: mut ref i32) f64 = {
+    val tmin: mut f64 = -1.0e30
+    val tmax: mut f64 = 1.0e30
+    val axes: mut [3]f64 = @zeroed
+    val dirs: mut [3]f64 = @zeroed
+    val mins: mut [3]f64 = @zeroed
+    val maxs: mut [3]f64 = @zeroed
+    mem.set_f64(@addr(axes) as ref void, 0, ray.origin.x)
+    mem.set_f64(@addr(axes) as ref void, 1, ray.origin.y)
+    mem.set_f64(@addr(axes) as ref void, 2, ray.origin.z)
+    mem.set_f64(@addr(dirs) as ref void, 0, ray.dir.x)
+    mem.set_f64(@addr(dirs) as ref void, 1, ray.dir.y)
+    mem.set_f64(@addr(dirs) as ref void, 2, ray.dir.z)
+    mem.set_f64(@addr(mins) as ref void, 0, b.min.x)
+    mem.set_f64(@addr(mins) as ref void, 1, b.min.y)
+    mem.set_f64(@addr(mins) as ref void, 2, b.min.z)
+    mem.set_f64(@addr(maxs) as ref void, 0, b.max.x)
+    mem.set_f64(@addr(maxs) as ref void, 1, b.max.y)
+    mem.set_f64(@addr(maxs) as ref void, 2, b.max.z)
+    val i: mut i32 = 0
+    for {
+        if i >= 3 {
+            break
+        }
+        val o = mem.f64_at(@addr(axes) as ref void, i)
+        val d = mem.f64_at(@addr(dirs) as ref void, i)
+        val lo = mem.f64_at(@addr(mins) as ref void, i)
+        val hi = mem.f64_at(@addr(maxs) as ref void, i)
+        if math.fabs(d) < 0.000001 {
+            if o < lo || o > hi {
+                return -1.0
+            }
+        } else {
+            val t1 = (lo - o) / d
+            val t2 = (hi - o) / d
+            val a: mut f64 = t1
+            val b2: mut f64 = t2
+            if a > b2 {
+                a = t2
+                b2 = t1
+            }
+            if a > tmin {
+                tmin = a
+            }
+            if b2 < tmax {
+                tmax = b2
+            }
+            if tmin > tmax {
+                return -1.0
+            }
+        }
+        i++
+    }
+
+    val best: mut f64 = 1.0e30
+    val best_face: mut i32 = -1
+    val fi: mut i32 = 0
+    for {
+        if fi >= b.face_count {
+            break
+        }
+        val f = face(b, fi)
+        val t = math.ray_plane(ray, @deref(f))
+        if t > 0.01 && t < best {
+            val p = math.v3_add(ray.origin, math.v3_mul(ray.dir, t))
+            if point_in_face(b, fi, p) {
+                best = t
+                best_face = fi
+            }
+        }
+        fi++
+    }
+    @deref(out_face) = best_face
+    if best_face < 0 {
+        return -1.0
+    }
+    return best
+}
+
+pub fn origin(b: ref Brush) math.Vec3 = {
+    return math.v3_mul(math.v3_add(b.min, b.max), 0.5)
+}
+
+pub fn size(b: ref Brush) math.Vec3 = {
+    return math.v3_sub(b.max, b.min)
+}

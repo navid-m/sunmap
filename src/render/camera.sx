@@ -1,0 +1,147 @@
+val math = use("../core/math.sx")
+
+pub type Camera = {
+    pos: mut math.Vec3
+    yaw: mut f64
+    pitch: mut f64
+    speed: mut f64
+    fov: mut f64
+}
+
+pub fn create() Camera = {
+    return Camera{
+        pos: math.v3(256.0, -320.0, 220.0)
+        yaw: 1.15
+        pitch: -0.32
+        speed: 520.0
+        fov: 68.0
+    }
+}
+
+pub fn forward(c: ref Camera) math.Vec3 = {
+    val cp = math.cos(c.pitch)
+    return math.v3(math.cos(c.yaw) * cp, math.sin(c.yaw) * cp, math.sin(c.pitch))
+}
+
+pub fn right(c: ref Camera) math.Vec3 = {
+    val f = forward(c)
+    val r = math.v3_cross(f, math.v3(0.0, 0.0, 1.0))
+    return math.v3_normalize(r)
+}
+
+pub fn up(c: ref Camera) math.Vec3 = {
+    return math.v3_normalize(math.v3_cross(right(c), forward(c)))
+}
+
+pub fn view(c: ref Camera) math.Mat4 = {
+    val eye = c.pos
+    val target = math.v3_add(eye, forward(c))
+    return math.mat4_look_at(eye, target, math.v3(0.0, 0.0, 1.0))
+}
+
+pub fn look(c: mut ref Camera, dx: f64, dy: f64) void = {
+    c.yaw = c.yaw - dx * 0.0026
+    c.pitch = c.pitch - dy * 0.0026
+    c.pitch = math.clampf(c.pitch, -1.52, 1.52)
+    if c.yaw > math.PI * 2.0 {
+        c.yaw = c.yaw - math.PI * 2.0
+    }
+    if c.yaw < 0.0 {
+        c.yaw = c.yaw + math.PI * 2.0
+    }
+}
+
+pub fn update(
+    c: mut ref Camera,
+    dt: f64,
+    fwd: bool,
+    back: bool,
+    left: bool,
+    right_key: bool,
+    up_key: bool,
+    down_key: bool,
+    fast: bool
+) void = {
+    val f = forward(c)
+    val r = right(c)
+    val mult: mut f64 = 1.0
+    if fast {
+        mult = 4.0
+    }
+    val move = c.speed * dt * mult
+    val p: mut math.Vec3 = c.pos
+    if fwd {
+        p = math.v3_add(p, math.v3_mul(f, move))
+    }
+    if back {
+        p = math.v3_sub(p, math.v3_mul(f, move))
+    }
+    if right_key {
+        p = math.v3_add(p, math.v3_mul(r, move))
+    }
+    if left {
+        p = math.v3_sub(p, math.v3_mul(r, move))
+    }
+    if up_key {
+        p = math.v3_add(p, math.v3(0.0, 0.0, move))
+    }
+    if down_key {
+        p = math.v3_sub(p, math.v3(0.0, 0.0, move))
+    }
+    c.pos = p
+}
+
+pub fn screen_ray(c: ref Camera, mx: i32, my: i32, width: i32, height: i32) math.Ray = {
+    val w: mut f64 = width as f64
+    val h: mut f64 = height as f64
+    if w < 1.0 {
+        w = 1.0
+    }
+    if h < 1.0 {
+        h = 1.0
+    }
+    val ndc_x = (mx as f64 * 2.0 / w) - 1.0
+    val ndc_y = 1.0 - (my as f64 * 2.0 / h)
+    val tan_half = math.tan(c.fov * 0.5 * math.DEG)
+    val aspect = w / h
+    val dir = math.v3_add(
+        forward(c),
+        math.v3_add(
+            math.v3_mul(right(c), ndc_x * tan_half * aspect),
+            math.v3_mul(up(c), ndc_y * tan_half)
+        )
+    )
+    return math.Ray{origin: c.pos, dir: math.v3_normalize(dir)}
+}
+
+pub fn pan(c: mut ref Camera, dx: f64, dy: f64) void = {
+    val scale = 0.55
+    val delta = math.v3_add(
+        math.v3_mul(right(c), dx * scale),
+        math.v3_mul(up(c), dy * scale)
+    )
+    c.pos = math.v3_add(c.pos, delta)
+}
+
+pub type Projected = {
+    x: mut f64
+    y: mut f64
+    depth: mut f64
+}
+
+pub fn project(c: ref Camera, p: math.Vec3, width: i32, height: i32) Projected = {
+    val v = view(c)
+    val vx = v.m00 * p.x + v.m01 * p.y + v.m02 * p.z + v.m03
+    val vy = v.m10 * p.x + v.m11 * p.y + v.m12 * p.z + v.m13
+    val vz = v.m20 * p.x + v.m21 * p.y + v.m22 * p.z + v.m23
+    val depth = -vz
+    val f = 1.0 / math.tan(c.fov * 0.5 * math.DEG)
+    val aspect = width as f64 / height as f64
+    val ndc_x = (vx * f / aspect) / depth
+    val ndc_y = (vy * f) / depth
+    return Projected{
+        x: (ndc_x * 0.5 + 0.5) * width as f64
+        y: (1.0 - (ndc_y * 0.5 + 0.5)) * height as f64
+        depth: depth
+    }
+}

@@ -1,0 +1,124 @@
+val buf     = use("./buffer.sx")
+val paths   = use("./paths.sx")
+val world   = use("../map/world.sx")
+val brush   = use("../map/brush.sx")
+val texture = use("../map/texture.sx")
+val str     = use("../core/strutil.sx")
+val fs      = use("std/fs")
+
+fn tex_material_name(t: ref texture.Texture, dst: ref u8, cap: i32) void = {
+    str.sanitize(dst, cap, t.name)
+}
+
+pub fn write_obj(w: mut ref world.World) bool = trust {
+    if !paths.ensure_export(w) {
+        return false
+    }
+    val safe: mut [64]u8 = @zeroed
+    paths.safe_name(w, @addr(safe) as ref u8, 64)
+
+    val obj: mut buf.Buf = buf.create()
+    val tmp: mut [512]u8 = @zeroed
+    buf.append_fmt(@addr(obj), "# sunmap\nmtllib {s}.mtl\n", {@addr(safe) as ref u8})
+
+    val vertex_index: mut i32 = 1
+    val bi: mut i32 = 0
+    for {
+        if bi >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = world.brush_at(w, bi)
+        if b.valid {
+            val tex = world.texture_at(w, b.tex)
+            val mtl: mut [64]u8 = @zeroed
+            tex_material_name(tex, @addr(mtl) as ref u8, 64)
+            buf.append_fmt(@addr(obj), "usemtl {s}\n", {@addr(mtl) as ref u8})
+            val fi: mut i32 = 0
+            for {
+                if fi >= b.face_count {
+                    break
+                }
+                val f = brush.face(b, fi)
+                val n = f.normal
+                val count = brush.order_len(b, fi)
+                val k: mut i32 = 0
+                for {
+                    if k >= count {
+                        break
+                    }
+                    val p = brush.face_vert(b, fi, k)
+                    val uv = brush.face_uv(
+                        @deref(f),
+                        p,
+                        world.texture_width(w, b.tex),
+                        world.texture_height(w, b.tex)
+                    )
+                    // Z-up world -> Y-up OBJ
+                    @snprintf(@addr(tmp) as ref u8, 512, "v {f} {f} {f}\n", {p.x, p.z, -p.y})
+                    buf.append_str(@addr(obj), @addr(tmp) as ref u8)
+                    @snprintf(@addr(tmp) as ref u8, 512, "vt {f} {f}\n", {uv.x, uv.y})
+                    buf.append_str(@addr(obj), @addr(tmp) as ref u8)
+                    @snprintf(@addr(tmp) as ref u8, 512, "vn {f} {f} {f}\n", {n.x, n.z, -n.y})
+                    buf.append_str(@addr(obj), @addr(tmp) as ref u8)
+                    k++
+                }
+                buf.append_str(@addr(obj), "f")
+                k = 0
+                for {
+                    if k >= count {
+                        break
+                    }
+                    val idx = vertex_index + k
+                    buf.append_fmt(@addr(obj), " {d}/{d}/{d}", {idx, idx, idx})
+                    k++
+                }
+                buf.append_str(@addr(obj), "\n")
+                vertex_index = vertex_index + count
+                fi++
+            }
+        }
+        bi++
+    }
+
+    val obj_path: mut [512]u8 = @zeroed
+    val obj_name: mut [128]u8 = @zeroed
+    @snprintf(@addr(obj_name) as ref u8, 128, "{s}.obj", {@addr(safe) as ref u8})
+    paths.export_file(w, @addr(obj_path) as ref u8, 512, @addr(obj_name) as ref u8)
+    val wrote = fs.write_all_bytes(@addr(obj_path) as ref u8, obj.data as ref void, obj.len)
+    buf.free(@addr(obj))
+
+    // MTL
+    val mtl: mut buf.Buf = buf.create()
+    buf.append_str(@addr(mtl), "# sunmap materials\n")
+    val i: mut i32 = 0
+    for {
+        if i >= w.texture_count {
+            break
+        }
+        val t = world.texture_at(w, i)
+        val mname: mut [64]u8 = @zeroed
+        tex_material_name(t, @addr(mname) as ref u8, 64)
+        buf.append_fmt(@addr(mtl), "newmtl {s}\n", {@addr(mname) as ref u8})
+        buf.append_str(
+            @addr(mtl),
+            "Ka 1.000 1.000 1.000\nKd 1.000 1.000 1.000\nKs 0.000 0.000 0.000\n"
+        )
+        buf.append_str(@addr(mtl), "d 1.0\nillum 1\n")
+        if t.path != none && @strlen(t.path) > 0 {
+            val base = str.basename(t.path)
+            buf.append_fmt(@addr(mtl), "map_Kd textures/{s}\n", {base})
+        }
+        buf.append_str(@addr(mtl), "\n")
+        i++
+    }
+    val mtl_path: mut [512]u8 = @zeroed
+    val mtl_name: mut [128]u8 = @zeroed
+    @snprintf(@addr(mtl_name) as ref u8, 128, "{s}.mtl", {@addr(safe) as ref u8})
+    paths.export_file(w, @addr(mtl_path) as ref u8, 512, @addr(mtl_name) as ref u8)
+    if !fs.write_all_bytes(@addr(mtl_path) as ref u8, mtl.data as ref void, mtl.len) {
+        buf.free(@addr(mtl))
+        return false
+    }
+    buf.free(@addr(mtl))
+    return wrote
+}

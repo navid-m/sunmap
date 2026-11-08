@@ -1,0 +1,5 @@
+val app = use("./app.sx")
+
+pub fn main() i32 = trust {
+    return app.run()
+}

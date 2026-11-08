@@ -1,0 +1,147 @@
+when linux {
+    link "-lSDL2"
+    link "-lSDL2_image"
+    link "-lSDL2_ttf"
+    link "-lGL"
+}
+
+when darwin {
+    link "-lSDL2"
+    link "-lSDL2_image"
+    link "-lSDL2_ttf"
+    link "-framework OpenGL"
+}
+
+when windows {
+    link "-lSDL2"
+    link "-lSDL2_image"
+    link "-lSDL2_ttf"
+    link "-lopengl32"
+}
+
+
+pub extern (C) fn SDL_Init(flags: u32) i32 = "SDL_Init"
+pub extern (C) fn SDL_Quit() void = "SDL_Quit"
+pub extern (C) fn SDL_GetError() ref u8 = "SDL_GetError"
+pub extern (C) fn SDL_CreateWindow(
+    title: ref u8,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    flags: u32
+) ref void = "SDL_CreateWindow"
+pub extern (C) fn SDL_DestroyWindow(win: ref void) void = "SDL_DestroyWindow"
+pub extern (C) fn SDL_SetWindowTitle(win: ref void, title: ref u8) void = "SDL_SetWindowTitle"
+pub extern (C) fn SDL_GetWindowSize(
+    win: ref void,
+    w: ref i32,
+    h: ref i32
+) void = "SDL_GetWindowSize"
+pub extern (C) fn SDL_SetWindowMinimumSize(
+    win: ref void,
+    w: i32,
+    h: i32
+) void = "SDL_SetWindowMinimumSize"
+pub extern (C) fn SDL_GetBasePath() ref u8 = "SDL_GetBasePath"
+pub extern (C) fn SDL_GetTicks() u32 = "SDL_GetTicks"
+pub extern (C) fn SDL_Delay(ms: u32) void = "SDL_Delay"
+pub extern (C) fn SDL_PollEvent(ev: ref void) i32 = "SDL_PollEvent"
+pub extern (C) fn SDL_GetKeyboardState(numkeys: ref i32) ref u8 = "SDL_GetKeyboardState"
+pub extern (C) fn SDL_SetRelativeMouseMode(enabled: i32) i32 = "SDL_SetRelativeMouseMode"
+pub extern (C) fn SDL_ShowCursor(toggle: i32) i32 = "SDL_ShowCursor"
+pub extern (C) fn SDL_StartTextInput() void = "SDL_StartTextInput"
+pub extern (C) fn SDL_StopTextInput() void = "SDL_StopTextInput"
+pub extern (C) fn SDL_free(p: ref void) void = "SDL_free"
+
+pub extern (C) fn SDL_GL_CreateContext(win: ref void) ref void = "SDL_GL_CreateContext"
+pub extern (C) fn SDL_GL_DeleteContext(ctx: ref void) void = "SDL_GL_DeleteContext"
+pub extern (C) fn SDL_GL_SetAttribute(attr: i32, value: i32) i32 = "SDL_GL_SetAttribute"
+pub extern (C) fn SDL_GL_SetSwapInterval(interval: i32) i32 = "SDL_GL_SetSwapInterval"
+pub extern (C) fn SDL_GL_SwapWindow(win: ref void) void = "SDL_GL_SwapWindow"
+
+pub extern (C) fn IMG_Init(flags: i32) i32 = "IMG_Init"
+pub extern (C) fn IMG_Quit() void = "IMG_Quit"
+pub extern (C) fn IMG_Load(path: ref u8) ref void = "IMG_Load"
+pub extern (C) fn IMG_SavePNG(surface: ref void, path: ref u8) i32 = "IMG_SavePNG"
+
+pub extern (C) fn TTF_Init() i32 = "TTF_Init"
+pub extern (C) fn TTF_Quit() void = "TTF_Quit"
+pub extern (C) fn TTF_OpenFont(path: ref u8, ptsize: i32) ref void = "TTF_OpenFont"
+pub extern (C) fn TTF_CloseFont(font: ref void) void = "TTF_CloseFont"
+pub extern (C) fn TTF_RenderUTF8_Blended(
+    font: ref void,
+    text: ref u8,
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8
+) ref void = "TTF_RenderUTF8_Blended"
+pub extern (C) fn TTF_SizeUTF8(
+    font: ref void,
+    text: ref u8,
+    w: ref i32,
+    h: ref i32
+) i32 = "TTF_SizeUTF8"
+
+pub extern (C) fn SDL_ConvertSurfaceFormat(
+    src: ref void,
+    fmt: u32,
+    flags: u32
+) ref void = "SDL_ConvertSurfaceFormat"
+pub extern (C) fn SDL_FreeSurface(surface: ref void) void = "SDL_FreeSurface"
+
+// Window flags.
+pub val SDL_WINDOW_OPENGL: u32 = 0x00000002
+pub val SDL_WINDOW_SHOWN: u32 = 0x00000004
+pub val SDL_WINDOW_RESIZABLE: u32 = 0x00000020
+pub val SDL_WINDOW_ALLOW_HIGHDPI: u32 = 0x00002000
+
+// GL context attributes.
+pub val SDL_GL_DOUBLEBUFFER: i32 = 5
+pub val SDL_GL_DEPTH_SIZE: i32 = 6
+pub val SDL_GL_MULTISAMPLEBUFFERS: i32 = 13
+pub val SDL_GL_MULTISAMPLESAMPLES: i32 = 14
+pub val SDL_GL_ACCELERATED_VISUAL: i32 = 15
+
+// Init flags.
+pub val SDL_INIT_VIDEO: u32 = 0x00000020
+pub val SDL_INIT_EVENTS: u32 = 0x00004000
+
+// Event types.
+pub val SDL_QUIT: i32 = 0x100
+pub val SDL_KEYDOWN: i32 = 0x300
+pub val SDL_KEYUP: i32 = 0x301
+pub val SDL_TEXTINPUT: i32 = 0x303
+pub val SDL_MOUSEMOTION: i32 = 0x400
+pub val SDL_MOUSEBUTTONDOWN: i32 = 0x401
+pub val SDL_MOUSEBUTTONUP: i32 = 0x402
+pub val SDL_MOUSEWHEEL: i32 = 0x403
+pub val SDL_DROPFILE: i32 = 0x1000
+pub val SDL_DROPBEGIN: i32 = 0x1001
+pub val SDL_DROPCOMPLETE: i32 = 0x1002
+
+pub val SDL_BUTTON_LEFT: u8 = 1
+pub val SDL_BUTTON_MIDDLE: u8 = 2
+pub val SDL_BUTTON_RIGHT: u8 = 3
+
+pub val SDL_PRESSED: u8 = 1
+
+// SDL_PIXELFORMAT_ABGR8888 (bytes in memory are RGBA on little endian).
+pub val SDL_PIXELFORMAT_ABGR8888: u32 = 0x16762004
+
+pub val IMG_INIT_JPG: i32 = 1
+pub val IMG_INIT_PNG: i32 = 2
+pub val IMG_INIT_TGA: i32 = 4
+pub val IMG_INIT_WEBP: i32 = 8
+
+pub type SdlSurface = {
+    flags: u32
+    pad0: u32
+    format: usize
+    w: i32
+    h: i32
+    pitch: i32
+    pad1: i32
+    pixels: usize
+}

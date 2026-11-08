@@ -1,0 +1,101 @@
+pub extern (C) fn glClearColor(r: f32, g: f32, b: f32, a: f32) void = "glClearColor"
+pub extern (C) fn glClear(mask: u32) void = "glClear"
+pub extern (C) fn glViewport(x: i32, y: i32, w: i32, h: i32) void = "glViewport"
+pub extern (C) fn glScissor(x: i32, y: i32, w: i32, h: i32) void = "glScissor"
+pub extern (C) fn glEnable(cap: u32) void = "glEnable"
+pub extern (C) fn glDisable(cap: u32) void = "glDisable"
+pub extern (C) fn glDepthFunc(func: u32) void = "glDepthFunc"
+pub extern (C) fn glDepthMask(flag: u8) void = "glDepthMask"
+pub extern (C) fn glBlendFunc(src: u32, dst: u32) void = "glBlendFunc"
+pub extern (C) fn glPolygonOffset(factor: f32, units: f32) void = "glPolygonOffset"
+pub extern (C) fn glLineWidth(width: f32) void = "glLineWidth"
+pub extern (C) fn glPointSize(size: f32) void = "glPointSize"
+
+pub extern (C) fn glMatrixMode(mode: u32) void = "glMatrixMode"
+pub extern (C) fn glLoadIdentity() void = "glLoadIdentity"
+pub extern (C) fn glLoadMatrixf(m: ref f32) void = "glLoadMatrixf"
+pub extern (C) fn glLoadMatrixd(m: ref f64) void = "glLoadMatrixd"
+pub extern (C) fn glPushMatrix() void = "glPushMatrix"
+pub extern (C) fn glPopMatrix() void = "glPopMatrix"
+pub extern (C) fn glOrtho(l: f64, r: f64, b: f64, t: f64, n: f64, f: f64) void = "glOrtho"
+
+pub extern (C) fn glBegin(mode: u32) void = "glBegin"
+pub extern (C) fn glEnd() void = "glEnd"
+pub extern (C) fn glVertex2f(x: f32, y: f32) void = "glVertex2f"
+pub extern (C) fn glVertex3f(x: f32, y: f32, z: f32) void = "glVertex3f"
+pub extern (C) fn glTexCoord2f(s: f32, t: f32) void = "glTexCoord2f"
+pub extern (C) fn glColor4f(r: f32, g: f32, b: f32, a: f32) void = "glColor4f"
+pub extern (C) fn glNormal3f(x: f32, y: f32, z: f32) void = "glNormal3f"
+
+pub extern (C) fn glGenTextures(n: i32, out: ref u32) void = "glGenTextures"
+pub extern (C) fn glDeleteTextures(n: i32, out: ref u32) void = "glDeleteTextures"
+pub extern (C) fn glBindTexture(target: u32, tex: u32) void = "glBindTexture"
+pub extern (C) fn glTexParameteri(target: u32, pname: u32, v: i32) void = "glTexParameteri"
+pub extern (C) fn glTexImage2D(
+    target: u32,
+    level: i32,
+    ifmt: i32,
+    w: i32,
+    h: i32,
+    border: i32,
+    fmt: u32,
+    kind: u32,
+    data: ref void
+) void = "glTexImage2D"
+pub extern (C) fn glTexEnvi(target: u32, pname: u32, v: i32) void = "glTexEnvi"
+pub extern (C) fn glPixelStorei(pname: u32, v: i32) void = "glPixelStorei"
+pub extern (C) fn glGetString(name: u32) ref u8 = "glGetString"
+
+pub val GL_DEPTH_BUFFER_BIT: u32 = 0x0100
+pub val GL_COLOR_BUFFER_BIT: u32 = 0x4000
+pub val GL_STENCIL_BUFFER_BIT: u32 = 0x0400
+
+pub val GL_POINTS: u32 = 0x0000
+pub val GL_LINES: u32 = 0x0001
+pub val GL_LINE_STRIP: u32 = 0x0003
+pub val GL_TRIANGLES: u32 = 0x0004
+pub val GL_TRIANGLE_FAN: u32 = 0x0006
+pub val GL_QUADS: u32 = 0x0007
+
+pub val GL_MATRIX_MODE: u32 = 0x0BA0
+pub val GL_PROJECTION: u32 = 0x1701
+pub val GL_MODELVIEW: u32 = 0x1700
+pub val GL_TEXTURE: u32 = 0x1702
+
+pub val GL_BLEND: u32 = 0x0BE2
+pub val GL_DEPTH_TEST: u32 = 0x0B71
+pub val GL_CULL_FACE: u32 = 0x0B44
+pub val GL_TEXTURE_2D: u32 = 0x0DE1
+pub val GL_POLYGON_OFFSET_FILL: u32 = 0x8037
+pub val GL_SCISSOR_TEST: u32 = 0x0C11
+
+pub val GL_SRC_ALPHA: u32 = 0x0302
+pub val GL_ONE_MINUS_SRC_ALPHA: u32 = 0x0303
+pub val GL_ONE: u32 = 1
+pub val GL_ZERO: u32 = 0
+
+pub val GL_NEVER: u32 = 0x0200
+pub val GL_LESS: u32 = 0x0201
+pub val GL_EQUAL: u32 = 0x0202
+pub val GL_LEQUAL: u32 = 0x0203
+
+pub val GL_TEXTURE_MAG_FILTER: u32 = 0x2800
+pub val GL_TEXTURE_MIN_FILTER: u32 = 0x2801
+pub val GL_TEXTURE_WRAP_S: u32 = 0x2802
+pub val GL_TEXTURE_WRAP_T: u32 = 0x2803
+pub val GL_TEXTURE_ENV: u32 = 0x2300
+pub val GL_TEXTURE_ENV_MODE: u32 = 0x2200
+
+pub val GL_LINEAR: i32 = 0x2601
+pub val GL_NEAREST: i32 = 0x2600
+pub val GL_REPEAT: i32 = 0x2901
+pub val GL_CLAMP_TO_EDGE: i32 = 0x812F
+pub val GL_MODULATE: i32 = 0x2100
+
+pub val GL_RGBA: u32 = 0x1908
+pub val GL_UNSIGNED_BYTE: u32 = 0x1401
+pub val GL_UNPACK_ALIGNMENT: u32 = 0x0CF5
+pub val GL_UNPACK_ROW_LENGTH: u32 = 0x0CF2
+
+pub val GL_VERSION: u32 = 0x1F02
+pub val GL_RENDERER: u32 = 0x1F01

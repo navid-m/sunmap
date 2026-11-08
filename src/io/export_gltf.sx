@@ -1,0 +1,597 @@
+val buf   = use("./buffer.sx")
+val paths = use("./paths.sx")
+val world = use("../map/world.sx")
+val brush = use("../map/brush.sx")
+val str   = use("../core/strutil.sx")
+val fs    = use("std/fs")
+val mem   = use("../core/mem.sx")
+
+fn mime_for(path: ref u8) ref u8 = {
+    val ext = str.extension(path)
+    if str.eql(
+        ext,
+        ".jpg"
+    ) || str.eql(ext, ".JPG") || str.eql(ext, ".jpeg") || str.eql(ext, ".JPEG") {
+        return "image/jpeg"
+    }
+    if str.eql(ext, ".tga") || str.eql(ext, ".TGA") {
+        return "image/x-tga"
+    }
+    if str.eql(ext, ".bmp") || str.eql(ext, ".BMP") {
+        return "image/bmp"
+    }
+    return "image/png"
+}
+
+fn texmap_at(tm: mut ref [256]i32, i: i32) i32 = {
+    return mem.i32_at(tm as ref void, i)
+}
+
+fn texmap_set(tm: mut ref [256]i32, i: i32, v: i32) void = {
+    mem.set_i32(tm as ref void, i, v)
+}
+
+fn frag_pos_accessor(
+    b: mut ref buf.Buf,
+    bv: i32,
+    count: i32,
+    minx: f64,
+    miny: f64,
+    minz: f64,
+    maxx: f64,
+    maxy: f64,
+    maxz: f64
+) void = {
+    val tmp: mut [1024]u8 = @zeroed
+    @snprintf(
+        @addr(tmp) as ref u8,
+        1024,
+        "\{\"bufferView\":{d},\"byteOffset\":0,\"componentType\":5126,\"count\":{d},\"type\":\"VEC3\",\"min\":[{f},{f},{f}],\"max\":[{f},{f},{f}]\}",
+        {bv, count, minx, miny, minz, maxx, maxy, maxz}
+    )
+    if b.len > 0 {
+        buf.append_ch(b, 44)
+    }
+    buf.append_str(b, @addr(tmp) as ref u8)
+}
+
+fn frag(b: mut ref buf.Buf, fmt: ref u8, args: argspack) void = {
+    if b.len > 0 {
+        buf.append_ch(b, 44)
+    }
+    buf.append_fmt(b, fmt, args)
+}
+
+fn build(w: mut ref world.World, glb: bool, json_out: mut ref buf.Buf) bool = trust {
+    if !paths.ensure_export(w) {
+        return false
+    }
+
+    val bin: mut buf.Buf = buf.create()
+    val prims: mut buf.Buf = buf.create()
+    val accs: mut buf.Buf = buf.create()
+    val bvs: mut buf.Buf = buf.create()
+    val imgs: mut buf.Buf = buf.create()
+    val texs: mut buf.Buf = buf.create()
+    val mats: mut buf.Buf = buf.create()
+
+    val acc_next: mut i32 = 0
+    val bv_next: mut i32 = 0
+
+    val bi: mut i32 = 0
+    for {
+        if bi >= w.brush_count {
+            break
+        }
+        val b: mut ref brush.Brush = world.brush_at(w, bi)
+        if b.valid && b.face_count > 0 {
+            val tw = world.texture_width(w, b.tex)
+            val th = world.texture_height(w, b.tex)
+
+            // positions
+            buf.append_pad4(@addr(bin))
+            val pos_off = bin.len
+            val vcount: mut i32 = 0
+            val minx: mut f32 = 0.0
+            val miny: mut f32 = 0.0
+            val minz: mut f32 = 0.0
+            val maxx: mut f32 = 0.0
+            val maxy: mut f32 = 0.0
+            val maxz: mut f32 = 0.0
+            val first: mut bool = true
+            val fi: mut i32 = 0
+            for {
+                if fi >= b.face_count {
+                    break
+                }
+                val count = brush.order_len(b, fi)
+                if count >= 3 {
+                    val k: mut i32 = 1
+                    for {
+                        if k >= count - 1 {
+                            break
+                        }
+                        val p0 = brush.face_vert(b, fi, 0)
+                        val p1 = brush.face_vert(b, fi, k)
+                        val p2 = brush.face_vert(b, fi, k + 1)
+                        // Y-up conversion and triangle fan
+                        val tx0 = p0.x as f32
+                        val ty0 = p0.z as f32
+                        val tz0 = -p0.y as f32
+                        val tx1 = p1.x as f32
+                        val ty1 = p1.z as f32
+                        val tz1 = -p1.y as f32
+                        val tx2 = p2.x as f32
+                        val ty2 = p2.z as f32
+                        val tz2 = -p2.y as f32
+                        buf.append_f32(@addr(bin), tx0)
+                        buf.append_f32(@addr(bin), ty0)
+                        buf.append_f32(@addr(bin), tz0)
+                        buf.append_f32(@addr(bin), tx1)
+                        buf.append_f32(@addr(bin), ty1)
+                        buf.append_f32(@addr(bin), tz1)
+                        buf.append_f32(@addr(bin), tx2)
+                        buf.append_f32(@addr(bin), ty2)
+                        buf.append_f32(@addr(bin), tz2)
+                        if first {
+                            minx = tx0
+                            miny = ty0
+                            minz = tz0
+                            maxx = tx0
+                            maxy = ty0
+                            maxz = tz0
+                            first = false
+                        }
+                        if tx0 < minx {
+                            minx = tx0
+                        }
+                        if ty0 < miny {
+                            miny = ty0
+                        }
+                        if tz0 < minz {
+                            minz = tz0
+                        }
+                        if tx0 > maxx {
+                            maxx = tx0
+                        }
+                        if ty0 > maxy {
+                            maxy = ty0
+                        }
+                        if tz0 > maxz {
+                            maxz = tz0
+                        }
+                        if tx1 < minx {
+                            minx = tx1
+                        }
+                        if ty1 < miny {
+                            miny = ty1
+                        }
+                        if tz1 < minz {
+                            minz = tz1
+                        }
+                        if tx1 > maxx {
+                            maxx = tx1
+                        }
+                        if ty1 > maxy {
+                            maxy = ty1
+                        }
+                        if tz1 > maxz {
+                            maxz = tz1
+                        }
+                        if tx2 < minx {
+                            minx = tx2
+                        }
+                        if ty2 < miny {
+                            miny = ty2
+                        }
+                        if tz2 < minz {
+                            minz = tz2
+                        }
+                        if tx2 > maxx {
+                            maxx = tx2
+                        }
+                        if ty2 > maxy {
+                            maxy = ty2
+                        }
+                        if tz2 > maxz {
+                            maxz = tz2
+                        }
+                        vcount += 3
+                        k++
+                    }
+                }
+                fi++
+            }
+            buf.append_pad4(@addr(bin))
+            val pos_len = bin.len - pos_off
+
+            // normals
+            buf.append_pad4(@addr(bin))
+            val nrm_off = bin.len
+            fi = 0
+            for {
+                if fi >= b.face_count {
+                    break
+                }
+                val f = brush.face(b, fi)
+                val nx = f.normal.x as f32
+                val ny = f.normal.z as f32
+                val nz = -f.normal.y as f32
+                val count = brush.order_len(b, fi)
+                if count >= 3 {
+                    val k: mut i32 = 1
+                    for {
+                        if k >= count - 1 {
+                            break
+                        }
+                        val q: mut i32 = 0
+                        for {
+                            if q >= 3 {
+                                break
+                            }
+                            buf.append_f32(@addr(bin), nx)
+                            buf.append_f32(@addr(bin), ny)
+                            buf.append_f32(@addr(bin), nz)
+                            q++
+                        }
+                        k++
+                    }
+                }
+                fi++
+            }
+            buf.append_pad4(@addr(bin))
+            val nrm_len = bin.len - nrm_off
+
+            // uvs
+            buf.append_pad4(@addr(bin))
+            val uv_off = bin.len
+            fi = 0
+            for {
+                if fi >= b.face_count {
+                    break
+                }
+                val f = brush.face(b, fi)
+                val count = brush.order_len(b, fi)
+                if count >= 3 {
+                    val k: mut i32 = 1
+                    for {
+                        if k >= count - 1 {
+                            break
+                        }
+                        val p0 = brush.face_vert(b, fi, 0)
+                        val p1 = brush.face_vert(b, fi, k)
+                        val p2 = brush.face_vert(b, fi, k + 1)
+                        val uv0 = brush.face_uv(@deref(f), p0, tw, th)
+                        val uv1 = brush.face_uv(@deref(f), p1, tw, th)
+                        val uv2 = brush.face_uv(@deref(f), p2, tw, th)
+                        buf.append_f32(@addr(bin), uv0.x as f32)
+                        buf.append_f32(@addr(bin), uv0.y as f32)
+                        buf.append_f32(@addr(bin), uv1.x as f32)
+                        buf.append_f32(@addr(bin), uv1.y as f32)
+                        buf.append_f32(@addr(bin), uv2.x as f32)
+                        buf.append_f32(@addr(bin), uv2.y as f32)
+                        k++
+                    }
+                }
+                fi++
+            }
+            buf.append_pad4(@addr(bin))
+            val uv_len = bin.len - uv_off
+
+            if vcount >= 3 {
+                val pos_bv = bv_next
+                bv_next++
+                frag(
+                    @addr(bvs),
+                    "\{\"buffer\":0,\"byteOffset\":{d},\"byteLength\":{d},\"target\":34962\}",
+                    {pos_off, pos_len}
+                )
+                frag_pos_accessor(@addr(accs), pos_bv, vcount, minx, miny, minz, maxx, maxy, maxz)
+                val pos_acc = acc_next
+                acc_next++
+
+                val nrm_bv = bv_next
+                bv_next++
+                frag(
+                    @addr(bvs),
+                    "\{\"buffer\":0,\"byteOffset\":{d},\"byteLength\":{d},\"target\":34962\}",
+                    {nrm_off, nrm_len}
+                )
+                frag(
+                    @addr(accs),
+                    "\{\"bufferView\":{d},\"byteOffset\":0,\"componentType\":5126,\"count\":{d},\"type\":\"VEC3\"\}",
+                    {nrm_bv, vcount}
+                )
+                val nrm_acc = acc_next
+                acc_next++
+
+                val uv_bv = bv_next
+                bv_next++
+                frag(
+                    @addr(bvs),
+                    "\{\"buffer\":0,\"byteOffset\":{d},\"byteLength\":{d},\"target\":34962\}",
+                    {uv_off, uv_len}
+                )
+                frag(
+                    @addr(accs),
+                    "\{\"bufferView\":{d},\"byteOffset\":0,\"componentType\":5126,\"count\":{d},\"type\":\"VEC2\"\}",
+                    {uv_bv, vcount}
+                )
+                val uv_acc = acc_next
+                acc_next++
+
+                val mat: mut i32 = b.tex
+                if mat < 0 || mat >= w.texture_count {
+                    mat = 0
+                }
+                frag(@addr(prims), "\{\"attributes\":\{\"POSITION\":{d},\"NORMAL\":{d},\"TEXCOORD_0\":{d}\},\"material\":{d},\"mode\":4\}", {
+                        pos_acc, nrm_acc, uv_acc, mat
+                    })
+            }
+        }
+        bi++
+    }
+
+    // images and textures
+    val texmap: mut [256]i32 = @zeroed
+    val img_count: mut i32 = 0
+    val i: mut i32 = 0
+    for {
+        if i >= w.texture_count {
+            break
+        }
+        texmap_set(@addr(texmap), i, -1)
+        val t = world.texture_at(w, i)
+        if t.path != none && @strlen(t.path) > 0 {
+            val tdir: mut [512]u8 = @zeroed
+            paths.texture_dir(w, @addr(tdir) as ref u8, 512)
+            val basename_safe: mut [128]u8 = @zeroed
+            str.sanitize(@addr(basename_safe) as ref u8, 128, t.name)
+            val png: mut [512]u8 = @zeroed
+            @snprintf(
+                @addr(png) as ref u8,
+                512,
+                "{s}/{s}.png",
+                {@addr(tdir) as ref u8, @addr(basename_safe) as ref u8}
+            )
+            if glb {
+                val data = fs.read_all_raw(@addr(png) as ref u8)
+                if data is some bytes {
+                    val sz = fs.file_size(@addr(png) as ref u8)
+                    val n: mut i64 = 0
+                    match sz {
+                        some v => {
+                            n = v
+                        }
+                        none => {
+                            n = 0
+                        }
+                    }
+                    buf.append_pad4(@addr(bin))
+                    val off = bin.len
+                    buf.append(@addr(bin), bytes as ref void, n)
+                    buf.append_pad4(@addr(bin))
+                    val bv = bv_next
+                    bv_next++
+                    frag(
+                        @addr(bvs),
+                        "\{\"buffer\":0,\"byteOffset\":{d},\"byteLength\":{d}\}",
+                        {off, n}
+                    )
+                    frag(@addr(imgs), "\{\"bufferView\":{d},\"mimeType\":\"image/png\"\}", {bv})
+                    texmap_set(@addr(texmap), i, img_count)
+                    img_count++
+                    mem.release(bytes as ref void)
+                }
+            } else {
+                frag(
+                    @addr(imgs),
+                    "\{\"uri\":\"textures/{s}.png\"\}",
+                    {@addr(basename_safe) as ref u8}
+                )
+                texmap_set(@addr(texmap), i, img_count)
+                img_count++
+            }
+        }
+        i++
+    }
+
+    val tex_count: mut i32 = 0
+    i = 0
+    for {
+        if i >= w.texture_count {
+            break
+        }
+        if texmap_at(@addr(texmap), i) >= 0 {
+            frag(@addr(texs), "\{\"sampler\":0,\"source\":{d}\}", {texmap_at(@addr(texmap), i)})
+            tex_count++
+        }
+        i++
+    }
+
+    i = 0
+    for {
+        if i >= w.texture_count {
+            break
+        }
+        if texmap_at(@addr(texmap), i) >= 0 {
+            frag(
+                @addr(mats),
+                "\{\"pbrMetallicRoughness\":\{\"baseColorFactor\":[1.0,1.0,1.0,1.0],\"baseColorTexture\":\{\"index\":{d}\},\"metallicFactor\":0.0,\"roughnessFactor\":1.0\},\"doubleSided\":true\}",
+                {texmap_at(@addr(texmap), i)}
+            )
+        } else {
+            frag(
+                @addr(mats),
+                "\{\"pbrMetallicRoughness\":\{\"baseColorFactor\":[0.55,0.57,0.60,1.0],\"metallicFactor\":0.0,\"roughnessFactor\":1.0\},\"doubleSided\":true\}",
+                {}
+            )
+        }
+        i++
+    }
+
+    // final JSON
+    buf.append_str(json_out, "{\"asset\":{\"version\":\"2.0\",\"generator\":\"sunmap\"},")
+    buf.append_str(json_out, "\"scene\":0,\"scenes\":[{\"nodes\":[0]}],")
+    buf.append_str(json_out, "\"nodes\":[{\"name\":\"sunmap\",\"mesh\":0}],")
+    buf.append_str(json_out, "\"meshes\":[{\"name\":\"sunmap\",\"primitives\":[")
+    if prims.len > 0 {
+        buf.append(json_out, prims.data as ref void, prims.len)
+    }
+    buf.append_str(json_out, "]}],")
+    buf.append_str(json_out, "\"materials\":[")
+    if mats.len > 0 {
+        buf.append(json_out, mats.data as ref void, mats.len)
+    }
+    buf.append_str(json_out, "],")
+    buf.append_str(json_out, "\"accessors\":[")
+    if accs.len > 0 {
+        buf.append(json_out, accs.data as ref void, accs.len)
+    }
+    buf.append_str(json_out, "],")
+    buf.append_str(json_out, "\"bufferViews\":[")
+    if bvs.len > 0 {
+        buf.append(json_out, bvs.data as ref void, bvs.len)
+    }
+    buf.append_str(json_out, "],")
+    buf.append_str(json_out, "\"images\":[")
+    if imgs.len > 0 {
+        buf.append(json_out, imgs.data as ref void, imgs.len)
+    }
+    buf.append_str(json_out, "],")
+    buf.append_str(json_out, "\"textures\":[")
+    if texs.len > 0 {
+        buf.append(json_out, texs.data as ref void, texs.len)
+    }
+    buf.append_str(json_out, "],")
+    buf.append_str(
+        json_out,
+        "\"samplers\":[{\"magFilter\":9729,\"minFilter\":9729,\"wrapS\":10497,\"wrapT\":10497}],"
+    )
+
+    val safe: mut [64]u8 = @zeroed
+    paths.safe_name(w, @addr(safe) as ref u8, 64)
+    if glb {
+        buf.append_fmt(json_out, "\"buffers\":[\{\"byteLength\":{d}\}]\}", {bin.len})
+    } else {
+        buf.append_fmt(
+            json_out,
+            "\"buffers\":[\{\"byteLength\":{d},\"uri\":\"{s}.bin\"\}]\}",
+            {bin.len, @addr(safe) as ref u8}
+        )
+    }
+
+    if !glb {
+        val bin_name: mut [128]u8 = @zeroed
+        @snprintf(@addr(bin_name) as ref u8, 128, "{s}.bin", {@addr(safe) as ref u8})
+        val bin_path: mut [512]u8 = @zeroed
+        paths.export_file(w, @addr(bin_path) as ref u8, 512, @addr(bin_name) as ref u8)
+        val wrote = fs.write_all_bytes(@addr(bin_path) as ref u8, bin.data as ref void, bin.len)
+        if !wrote {
+            buf.free(@addr(bin))
+            return false
+        }
+    }
+
+    // Store the binary for GLB assembly in a module-global scratch buffer.
+    val gb: mut ref buf.Buf = glb_state()
+    gb.data = bin.data
+    gb.len = bin.len
+    gb.cap = bin.cap
+
+    buf.free(@addr(prims))
+    buf.free(@addr(accs))
+    buf.free(@addr(bvs))
+    buf.free(@addr(imgs))
+    buf.free(@addr(texs))
+    buf.free(@addr(mats))
+    return true
+}
+
+val glb_bin_ptr: mut ref void = none
+
+fn glb_state() mut ref buf.Buf = {
+    if glb_bin_ptr == none {
+        glb_bin_ptr = mem.allocate(@sizeof(buf.Buf) as i64)
+        mem.zero(glb_bin_ptr, @sizeof(buf.Buf) as i64)
+    }
+    return glb_bin_ptr as ref buf.Buf
+}
+
+fn reset_glb() void = {
+    val gb: mut ref buf.Buf = glb_state()
+    buf.free(gb)
+}
+
+pub fn write_gltf(w: mut ref world.World) bool = trust {
+    if !paths.ensure_export(w) {
+        return false
+    }
+    val json: mut buf.Buf = buf.create()
+    if !build(w, false, @addr(json)) {
+        buf.free(@addr(json))
+        return false
+    }
+    val safe: mut [64]u8 = @zeroed
+    paths.safe_name(w, @addr(safe) as ref u8, 64)
+    val name: mut [128]u8 = @zeroed
+    @snprintf(@addr(name) as ref u8, 128, "{s}.gltf", {@addr(safe) as ref u8})
+    val path: mut [512]u8 = @zeroed
+    paths.export_file(w, @addr(path) as ref u8, 512, @addr(name) as ref u8)
+    val wrote = fs.write_all_bytes(@addr(path) as ref u8, json.data as ref void, json.len)
+    buf.free(@addr(json))
+    reset_glb()
+    return wrote
+}
+
+pub fn write_glb(w: mut ref world.World) bool = trust {
+    if !paths.ensure_export(w) {
+        return false
+    }
+    val json: mut buf.Buf = buf.create()
+    if !build(w, true, @addr(json)) {
+        buf.free(@addr(json))
+        return false
+    }
+
+    // JSON chunk padded with spaces, binary chunk padded with zeroes.
+    for {
+        if json.len % 4 == 0 {
+            break
+        }
+        buf.append_ch(@addr(json), 32)
+    }
+    val gb: mut ref buf.Buf = glb_state()
+    val bin_len: mut i64 = gb.len
+    for {
+        if bin_len % 4 == 0 {
+            break
+        }
+        buf.append_ch(gb, 0)
+        bin_len = bin_len + 1
+    }
+    val total = 12 + 8 + json.len + 8 + bin_len
+
+    val out: mut buf.Buf = buf.create()
+    buf.append_u32(@addr(out), 0x46546C67)
+    buf.append_u32(@addr(out), 2)
+    buf.append_u32(@addr(out), total as u32)
+    buf.append_u32(@addr(out), json.len as u32)
+    buf.append_u32(@addr(out), 0x4E4F534A)
+    buf.append(@addr(out), json.data as ref void, json.len)
+    buf.append_u32(@addr(out), bin_len as u32)
+    buf.append_u32(@addr(out), 0x004E4942)
+    buf.append(@addr(out), gb.data as ref void, gb.len)
+
+    val safe: mut [64]u8 = @zeroed
+    paths.safe_name(w, @addr(safe) as ref u8, 64)
+    val name: mut [128]u8 = @zeroed
+    @snprintf(@addr(name) as ref u8, 128, "{s}.glb", {@addr(safe) as ref u8})
+    val path: mut [512]u8 = @zeroed
+    paths.export_file(w, @addr(path) as ref u8, 512, @addr(name) as ref u8)
+    val wrote = fs.write_all_bytes(@addr(path) as ref u8, out.data as ref void, out.len)
+    buf.free(@addr(out))
+    buf.free(@addr(json))
+    reset_glb()
+    return wrote
+}
