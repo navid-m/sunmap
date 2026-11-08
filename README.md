@@ -14,8 +14,6 @@ spectre build dev       # ./sunmap-dev
 spectre build release   # ./sunmap
 ```
 
-Both configurations use the `-alt` (C99) backend and `-dynamic`.
-
 The bundled UI font is `assets/font.ttf` (DejaVu Sans). If it is missing the
 editor falls back to common system fonts.
 
@@ -46,38 +44,3 @@ editor falls back to common system fonts.
 The top bar also has Brush/Face/Vertex buttons, Save/Load, and Export. The
 inspector exposes grid, wall thickness, brush height, CSG operations, the
 active texture, and per-format export buttons.
-
-## Project layout (`.sm`)
-
-`.sm` is a line/token oriented format intended to stay readable and easy
-to diff:
-
-```
-sunmap 1
-name untitled
-camera 256 -320 220 1.15 -0.32
-grid 16
-wall 16
-height 96
-texture default -
-texture red textures/red.png
-brush 1 6
-p 1 0 0 416
-p -1 0 0 -336
-...
-end
-```
-
-Each `brush` stores the texture index, face count, then one plane per face.
-`p nx ny nz d` is the halfspace `n · p <= d`.
-
-## Export details
-
-- `.map` is Valve 220: three clockwise-from-outside points per face, texture
-  axes and scale, worldspawn entity.
-- `.obj`/`.mtl` use Y-up coordinates, triangulated faces, per-vertex UVs and
-  normals, one material per texture.
-- `.gltf` references `<project>.bin` and PNG images under `textures/`.
-- `.glb` embeds the same buffer and PNG images in the binary chunk.
-- Textures are copied to `exports/<project>/textures/` and converted to PNG for
-  glTF/GLB so TGA/BMP sources also work in engines.
