@@ -540,7 +540,7 @@ pub fn draw(
     // Project label in top bar
     val proj_buf: mut [96]u8 = @zeroed
     @snprintf(@addr(proj_buf) as ref u8, 96, "{s}.sm", {world.name(w)})
-    draw2d.text_right(0, rx - 268, 22, @addr(proj_buf) as ref u8, theme.MUTED())
+    draw2d.text_right(0, rx - 268, 16, @addr(proj_buf) as ref u8, theme.MUTED())
 
     draw_texture_panel(
         w,
