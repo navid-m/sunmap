@@ -116,16 +116,6 @@ pub fn draw_brush(b: mut ref brush.Brush, w: mut ref world.World, selected: bool
     if !b.valid {
         return
     }
-    val tex = world.texture_gl(w, b.tex)
-    val tw = world.texture_width(w, b.tex)
-    val th = world.texture_height(w, b.tex)
-
-    if tex != 0 {
-        gl.glEnable(gl.GL_TEXTURE_2D)
-        gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
-    } else {
-        gl.glDisable(gl.GL_TEXTURE_2D)
-    }
 
     gl.glEnable(gl.GL_POLYGON_OFFSET_FILL)
     gl.glPolygonOffset(1.0, 1.0)
@@ -135,6 +125,21 @@ pub fn draw_brush(b: mut ref brush.Brush, w: mut ref world.World, selected: bool
         if fi >= b.face_count {
             break
         }
+        val face_tex = brush.face_texture(b, fi)
+        val ti: mut i32 = b.tex
+        if face_tex >= 0 {
+            ti = face_tex
+        }
+        val tex = world.texture_gl(w, ti)
+        val tw = world.texture_width(w, ti)
+        val th = world.texture_height(w, ti)
+        if tex != 0 {
+            gl.glEnable(gl.GL_TEXTURE_2D)
+            gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
+        } else {
+            gl.glDisable(gl.GL_TEXTURE_2D)
+        }
+
         val f = brush.face(b, fi)
         val n = f.normal
         val shade = face_shade(n)

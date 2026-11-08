@@ -3,6 +3,7 @@ val text     = use("../render/text.sx")
 val theme    = use("../render/theme.sx")
 val color    = use("../core/color.sx")
 val math     = use("../core/math.sx")
+val mem      = use("../core/mem.sx")
 val str      = use("../core/strutil.sx")
 val c        = use("../core/constants.sx")
 val brush    = use("../map/brush.sx")
@@ -12,6 +13,9 @@ val input    = use("../platform/input.sx")
 val uistate  = use("./state.sx")
 val project  = use("../io/project.sx")
 val exporter = use("../io/export.sx")
+val importer = use("../io/importer.sx")
+val fs       = use("std/fs")
+val allocators = use("std/allocators")
 
 pub fn over_ui(mx: i32, my: i32, width: i32, height: i32) bool = {
     if my < c.TOP_BAR_H {
@@ -199,7 +203,9 @@ fn draw_texture_panel(
                 ui.active_tex = i
                 if ui.mode == c.MODE_FACE && ui.face_brush >= 0 && ui.face_brush < w.brush_count {
                     val fb: mut ref brush.Brush = world.brush_at(w, ui.face_brush)
-                    fb.tex = i
+                    if ui.face_index >= 0 && ui.face_index < fb.face_count {
+                        brush.set_face_texture(fb, ui.face_index, i)
+                    }
                     uistate.set_status(ui, "Applied {s} to face", {t.name})
                 } elif world.selected_count(w) > 0 {
                     world.apply_texture(w, i)
@@ -453,7 +459,327 @@ fn draw_inspector(
     row += 16
     draw2d.text_draw(0, px, row, "Alt+drag: move on Y axis", theme.DIM())
     row += 16
+    draw2d.text_draw(0, px, row, "Drop .map / .wad to import", theme.DIM())
+    row += 16
     draw2d.text_draw(0, px, row, "V: vertex edit mode", theme.DIM())
+}
+
+fn copy_range(dst: ref u8, cap: i32, src: ref u8, start: i64, end: i64) void = {
+    val count: mut i64 = end - start
+    if count < 0 {
+        count = 0
+    }
+    if count > (cap - 1) as i64 {
+        count = (cap - 1) as i64
+    }
+    val i: mut i64 = 0
+    for {
+        if i >= count {
+            break
+        }
+        mem.set_u8(dst, i as i32, mem.u8_at(src, (start + i) as i32))
+        i++
+    }
+    mem.set_u8(dst, count as i32, 0)
+}
+
+fn parent_dir(path: ref u8, out: ref u8, cap: i32) void = {
+    val n = str.len(path)
+    val end: mut i64 = n
+    for {
+        if end <= 1 {
+            break
+        }
+        val c = mem.u8_at(path, (end - 1) as i32)
+        if c != 47 && c != 92 {
+            break
+        }
+        end--
+    }
+    val last: mut i64 = -1
+    val i: mut i64 = 0
+    for {
+        if i >= end {
+            break
+        }
+        val c = mem.u8_at(path, i as i32)
+        if c == 47 || c == 92 {
+            last = i
+        }
+        i++
+    }
+    if last < 0 {
+        str.copy(out, cap, ".")
+    } else {
+        copy_range(out, cap, path, 0, last + 1)
+    }
+}
+
+fn join_path(out: ref u8, cap: i32, dir: ref u8, name: ref u8) void = {
+    val n = str.len(dir)
+    if n == 0 {
+        str.copy(out, cap, name)
+        return
+    }
+    val c = mem.u8_at(dir, (n - 1) as i32)
+    if c == 47 || c == 92 {
+        @snprintf(out, cap, "{s}{s}", {dir, name})
+    } else {
+        @snprintf(out, cap, "{s}/{s}", {dir, name})
+    }
+}
+
+fn picker_accepts(path: ref u8, kind: i32) bool = {
+    val ext = str.extension(path)
+    if kind == c.PICKER_PROJECT {
+        return str.eql(ext, ".sm") || str.eql(ext, ".SM")
+    }
+    if kind == c.PICKER_IMPORT {
+        return str.eql(ext, ".map") || str.eql(ext, ".MAP") ||
+        str.eql(ext, ".wad") || str.eql(ext, ".WAD")
+    }
+    return true
+}
+
+fn set_picker_dir(ui: mut ref uistate.UIState, path: ref u8) void = {
+    str.copy(@addr(ui.picker_dir) as ref u8, 1024, path)
+    ui.picker_scroll = 0
+}
+
+pub fn prepare_picker(ui: mut ref uistate.UIState, kind: i32) void = trust {
+    if str.len(@addr(ui.picker_dir) as ref u8) > 0 {
+        return
+    }
+    if kind == c.PICKER_PROJECT && fs.is_directory("projects") {
+        set_picker_dir(ui, "projects")
+        return
+    }
+    val cwd = fs.cwd_raw()
+    match cwd {
+        some path => {
+            set_picker_dir(ui, path)
+            @free(path as ref void)
+        }
+        none => {
+            set_picker_dir(ui, ".")
+        }
+    }
+}
+
+fn draw_picker(
+    w: mut ref world.World,
+    cam: mut ref camera.Camera,
+    ui: mut ref uistate.UIState,
+    inp: mut ref input.Input,
+    width: i32,
+    height: i32
+) void = trust {
+    prepare_picker(ui, ui.picker_kind)
+
+    draw2d.rect(0, 0, width, height, color.color(0.0, 0.0, 0.0, 0.55))
+
+    val pw: mut i32 = 782
+    if pw > width - 32 {
+        pw = width - 32
+    }
+    val max_h = height - c.TOP_BAR_H - c.BOTTOM_BAR_H - 32
+    val ph: mut i32 = max_h
+    if ph > 620 {
+        ph = 620
+    }
+    if ph < 260 {
+        ph = height - 40
+    }
+    val px = (width - pw) / 2
+    val py = (height - ph) / 2
+
+    draw2d.rect(px, py, pw, ph, theme.PANEL())
+    draw2d.rect_outline(px, py, pw, ph, 1, theme.BORDER())
+
+    val title: mut [96]u8 = @zeroed
+    if ui.picker_kind == c.PICKER_PROJECT {
+        @snprintf(@addr(title) as ref u8, 96, "Open sunmap project", {})
+    } else {
+        @snprintf(@addr(title) as ref u8, 96, "Import Quake .map / .wad", {})
+    }
+    draw2d.text_draw(1, px + 18, py + 12, @addr(title) as ref u8, theme.TEXT())
+
+    val dir_text = @addr(ui.picker_dir) as ref u8
+    draw2d.rect(px + 18, py + 44, pw - 36, 32, theme.PANEL_2())
+    draw2d.rect_outline(px + 18, py + 44, pw - 36, 32, 1, theme.BORDER_SOFT())
+    draw2d.clip(px + 18, py + 44, pw - 36, 32)
+    draw2d.text_draw(0, px + 26, py + 53, dir_text, theme.TEXT())
+    draw2d.clip_off()
+
+    val by = py + ph - 42
+    if button(inp, px + 18, by, 64, 28, "Up", false) {
+        val parent: mut [1024]u8 = @zeroed
+        parent_dir(dir_text, @addr(parent) as ref u8, 1024)
+        set_picker_dir(ui, @addr(parent) as ref u8)
+    }
+    if button(inp, px + 90, by, 76, 28, "Home", false) {
+        val home = fs.home_dir_raw()
+        match home {
+            some path => {
+                set_picker_dir(ui, path)
+                @free(path as ref void)
+            }
+            none => {}
+        }
+    }
+    if button(inp, px + 174, by, 92, 28, "Projects", false) {
+        if fs.is_directory("projects") {
+            set_picker_dir(ui, "projects")
+        }
+    }
+    if button(inp, px + pw - 96, by, 78, 28, "Cancel", false) {
+        uistate.close_picker(ui)
+        return
+    }
+
+    val lx = px + 18
+    val ly = py + 86
+    val lw = pw - 36
+    val lh = by - ly - 14
+    draw2d.rect(lx, ly, lw, lh, theme.PANEL_2())
+    draw2d.rect_outline(lx, ly, lw, lh, 1, theme.BORDER_SOFT())
+    draw2d.clip(lx, ly, lw, lh)
+
+    val row_h: i32 = 26
+    val heap: allocators.HeapAllocator = @zeroed
+    val entries_opt = fs.walk_dir_raw[allocators.HeapAllocator](heap, dir_text)
+    val selected: mut bool = false
+    val selected_is_dir: mut bool = false
+    val selected_path: mut [1024]u8 = @zeroed
+    val total: mut i32 = 0
+
+    if entries_opt is some list {
+        val n = @len(list)
+        val count_i: mut i64 = 0
+        val full: mut [1024]u8 = @zeroed
+        for {
+            if count_i >= n as i64 {
+                break
+            }
+            val got = @get(list, count_i as usize)
+            if got is some entry {
+                join_path(@addr(full) as ref u8, 1024, dir_text, entry)
+                if fs.is_directory(@addr(full) as ref u8) ||
+                picker_accepts(@addr(full) as ref u8, ui.picker_kind) {
+                    total++
+                }
+            }
+            count_i++
+        }
+
+        if inp.wheel != 0 && inside(inp.mx, inp.my, lx, ly, lw, lh) {
+            ui.picker_scroll = ui.picker_scroll - inp.wheel * 48
+            inp.wheel = 0
+        }
+        val max_scroll: mut i32 = total * row_h - lh
+        if max_scroll < 0 {
+            max_scroll = 0
+        }
+        if ui.picker_scroll < 0 {
+            ui.picker_scroll = 0
+        }
+        if ui.picker_scroll > max_scroll {
+            ui.picker_scroll = max_scroll
+        }
+
+        val row: mut i32 = 0
+        val pass: mut i32 = 0
+        for {
+            if pass >= 2 {
+                break
+            }
+            val i: mut i64 = 0
+            for {
+                if i >= n as i64 {
+                    break
+                }
+                val got = @get(list, i as usize)
+                if got is some entry {
+                    join_path(@addr(full) as ref u8, 1024, dir_text, entry)
+                    val is_dir = fs.is_directory(@addr(full) as ref u8)
+                    val wanted: mut bool = is_dir
+                    if pass == 1 {
+                        wanted = !is_dir &&
+                        picker_accepts(@addr(full) as ref u8, ui.picker_kind)
+                    }
+                    if wanted {
+                        val ry = ly + row * row_h - ui.picker_scroll
+                        if ry + row_h > ly && ry < ly + lh {
+                            val hover = inside(inp.mx, inp.my, lx, ry, lw, row_h)
+                            if hover {
+                                draw2d.rect(lx, ry, lw, row_h, theme.PANEL_HOVER())
+                            }
+                            if is_dir {
+                                val label: mut [256]u8 = @zeroed
+                                @snprintf(@addr(label) as ref u8, 256, "{s}/", {entry})
+                                draw2d.text_draw(
+                                    0,
+                                    lx + 10,
+                                    ry + 6,
+                                    @addr(label) as ref u8,
+                                    theme.ACCENT()
+                                )
+                            } else {
+                                draw2d.text_draw(0, lx + 10, ry + 6, entry, theme.TEXT())
+                            }
+                            if hover && inp.clicked_left {
+                                str.copy(@addr(selected_path) as ref u8, 1024, @addr(full) as ref u8)
+                                selected_is_dir = is_dir
+                                selected = true
+                                inp.clicked_left = false
+                            }
+                        }
+                        row++
+                    }
+                }
+                i++
+            }
+            pass++
+        }
+        @listfree(list)
+    }
+
+    if total == 0 {
+        draw2d.text_draw(0, lx + 10, ly + 8, "No matching files.", theme.MUTED())
+    }
+
+    draw2d.clip_off()
+
+    if selected {
+        if selected_is_dir {
+            set_picker_dir(ui, @addr(selected_path) as ref u8)
+        } else {
+            uistate.close_picker(ui)
+            if ui.picker_kind == c.PICKER_PROJECT {
+                if project.load_path(w, cam, ui, @addr(selected_path) as ref u8) {
+                    uistate.set_status(
+                        ui,
+                        "Loaded {s}.",
+                        {str.basename(@addr(selected_path) as ref u8)}
+                    )
+                } else {
+                    uistate.set_status(
+                        ui,
+                        "Could not load {s}.",
+                        {str.basename(@addr(selected_path) as ref u8)}
+                    )
+                }
+            } else {
+                if !importer.import_path(w, ui, @addr(selected_path) as ref u8) {
+                    uistate.set_status(
+                        ui,
+                        "Unsupported file {s}.",
+                        {str.basename(@addr(selected_path) as ref u8)}
+                    )
+                }
+            }
+        }
+    }
 }
 
 pub fn draw(
@@ -465,6 +791,12 @@ pub fn draw(
     height: i32
 ) void = trust {
     draw2d.begin(width, height)
+
+    if ui.picker_open {
+        draw_picker(w, cam, ui, inp, width, height)
+        draw2d.end()
+        return
+    }
 
     // Panels only: the 3D viewport is already drawn underneath.
     draw2d.rect(0, 0, width, c.TOP_BAR_H, theme.PANEL())
@@ -530,17 +862,18 @@ pub fn draw(
         }
     }
     if button(inp, rx - 250, 11, 78, 30, "Load", false) {
-        if project.load(w, cam, ui) {
-            uistate.set_status(ui, "Loaded projects/{s}.sm", {world.name(w)})
-        } else {
-            uistate.set_status(ui, "No project file for {s}.", {world.name(w)})
-        }
+        prepare_picker(ui, c.PICKER_PROJECT)
+        uistate.open_picker(ui, c.PICKER_PROJECT)
+    }
+    if button(inp, rx - 334, 11, 78, 30, "Import", false) {
+        prepare_picker(ui, c.PICKER_IMPORT)
+        uistate.open_picker(ui, c.PICKER_IMPORT)
     }
 
     // Project label in top bar
     val proj_buf: mut [96]u8 = @zeroed
     @snprintf(@addr(proj_buf) as ref u8, 96, "{s}.sm", {world.name(w)})
-    draw2d.text_right(0, rx - 268, 16, @addr(proj_buf) as ref u8, theme.MUTED())
+    draw2d.text_right(0, rx - 352, 16, @addr(proj_buf) as ref u8, theme.MUTED())
 
     draw_texture_panel(
         w,

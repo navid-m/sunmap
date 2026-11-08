@@ -66,11 +66,16 @@ pub fn write_map(w: mut ref world.World) bool = trust {
                 val p0 = brush.face_vert(b, fi, 0)
                 val p1 = brush.face_vert(b, fi, 1)
                 val p2 = brush.face_vert(b, fi, 2)
-                val tex = world.texture_at(w, b.tex)
+                val ft = brush.face_texture(b, fi)
+                val ti: mut i32 = b.tex
+                if ft >= 0 {
+                    ti = ft
+                }
+                val tex = world.texture_at(w, ti)
                 val tn: mut [64]u8 = @zeroed
                 str.sanitize(@addr(tn) as ref u8, 64, tex.name)
-                val tw = world.texture_width(w, b.tex)
-                val th = world.texture_height(w, b.tex)
+                val tw = world.texture_width(w, ti)
+                val th = world.texture_height(w, ti)
                 append_face_line(@addr(out), p0, p2, p1, @addr(tn) as ref u8, u, v, tw, th)
                 fi++
             }

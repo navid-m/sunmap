@@ -1,0 +1,757 @@
+/// WAD2/WAD3 texture reader.
+///
+/// Adapted from navid-m/wad (GPL-3.0-only), which is the standalone Spectre
+/// WAD extractor this module was built from:
+/// https://github.com/navid-m/wad
+///
+/// It decodes Quake and Half-Life miptex/qpic/flat lumps into PNG files so the
+/// regular sunmap texture loader can pick them up.
+
+/// Extract images from Quake WAD2 and Half-Life WAD3 archives.
+///
+/// Usage: wad <input.wad> [output-dir]
+///
+/// (C) Navid Momtahen - 2026
+/// SPDX License Identifier: GPL-3.0-only
+
+val fs    = use("std/fs")
+val stdio = use("std/stdio")
+
+val FALLBACK_PALETTE: ref u8 = @embed("../../assets/quake_palette.lmp")
+val FALLBACK_PALETTE_LEN: usize = @embedlen("../../assets/quake_palette.lmp")
+val TYP_PALETTE: u8 = 64    // WAD2 palette lump
+val TYP_QPIC: u8 = 66       // width, height, indexed pixels
+val TYP_MIPTEX2: u8 = 68    // Quake WAD2 texture
+val TYP_FLAT: u8 = 69       // WAD2 console picture (no header)
+val TYP_SPRAY: u8 = 64      // WAD3 spray decal, same payload as miptex
+val TYP_MIPTEX3: u8 = 67    // Half-Life WAD3 texture
+
+fn u8_at(data: ref u8, off: i64) u8 = trust {
+    return @load8(@ptradd(data, off as usize))
+}
+
+fn u16_at(data: ref u8, off: i64) u16 = trust {
+    val b0: u16 = @load8(@ptradd(data, off as usize)) as u16
+    val b1: u16 = @load8(@ptradd(data, (off + 1) as usize)) as u16
+    return b0 | (b1 << 8)
+}
+
+fn u32_at(data: ref u8, off: i64) u32 = trust {
+    val b0: u32 = @load8(@ptradd(data, off as usize)) as u32
+    val b1: u32 = @load8(@ptradd(data, (off + 1) as usize)) as u32
+    val b2: u32 = @load8(@ptradd(data, (off + 2) as usize)) as u32
+    val b3: u32 = @load8(@ptradd(data, (off + 3) as usize)) as u32
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+}
+
+fn put8(buf: ref u8, off: i64, value: u8) void = trust {
+    @store8(@ptradd(buf, off as usize), value)
+}
+
+fn put16le(buf: ref u8, off: i64, value: u16) void = trust {
+    @store8(@ptradd(buf, off as usize), (value & 255) as u8)
+    @store8(@ptradd(buf, (off + 1) as usize), ((value >> 8) & 255) as u8)
+}
+
+fn put32be(buf: ref u8, off: i64, value: u32) void = trust {
+    @store8(@ptradd(buf, off as usize), ((value >> 24) & 255) as u8)
+    @store8(@ptradd(buf, (off + 1) as usize), ((value >> 16) & 255) as u8)
+    @store8(@ptradd(buf, (off + 2) as usize), ((value >> 8) & 255) as u8)
+    @store8(@ptradd(buf, (off + 3) as usize), (value & 255) as u8)
+}
+
+/// Check that [off, off + len) lies inside a buffer of `size` bytes.
+fn range_ok(size: i64, off: i64, len: i64) bool = {
+    if off < 0 || len < 0 || off > size {
+        return false
+    }
+    return len <= size - off
+}
+
+/// Turn a 16-byte WAD lump name into a safe, NUL-terminated file name.
+fn lump_name(data: ref u8, entry: i64) ref u8 = trust {
+    val out: ref u8 = @alloc(17) as ref u8
+    if out == none {
+        return ""
+    }
+
+    val n: mut i64 = 0
+    for i = 0, i < 16, i++ {
+        val c: u8 = u8_at(data, entry + 16 + i)
+        if c == 0 {
+            break
+        }
+
+        val ch: mut u8 = c
+        if ch < 32 || ch == 127 {
+            ch = 95
+        }
+        if ch == 47 || ch == 92 || ch == 58 || ch == 42 || ch == 63 ||
+        ch == 34 || ch == 60 || ch == 62 || ch == 124 {
+            ch = 95
+        }
+
+        @store8(@ptradd(out, n as usize), ch)
+        n++
+    }
+
+    for {
+        if n <= 0 {
+            break
+        }
+        if @load8(@ptradd(out, (n - 1) as usize)) != 32 {
+            break
+        }
+        n--
+    }
+
+    if n > 0 && @load8(out) == 46 {
+        @store8(out, 95)
+    }
+
+    if n == 0 {
+        @memcpy(out, "image", 5)
+        @store8(@ptradd(out, 5 as usize), 0)
+        return out
+    }
+
+    @store8(@ptradd(out, n as usize), 0)
+    return out
+}
+
+fn png_path(out_dir: ref u8, name: ref u8) ref u8 = trust {
+    val dlen: i64 = @strlen(out_dir)
+    val nlen: i64 = @strlen(name)
+    val buf: ref u8 = @alloc(dlen + nlen + 6) as ref u8
+    if buf == none {
+        return ""
+    }
+
+    if dlen > 0 {
+        @memcpy(buf, out_dir, dlen as usize)
+    }
+
+    val p: mut i64 = dlen
+    @store8(@ptradd(buf, p as usize), 47) // '/'
+    p++
+    if nlen > 0 {
+        @memcpy(@ptradd(buf, p as usize), name, nlen as usize)
+        p += nlen
+    }
+    @memcpy(@ptradd(buf, p as usize), ".png", 4)
+    p += 4
+    @store8(@ptradd(buf, p as usize), 0)
+    return buf
+}
+
+/// If no output directory was supplied, use the input filename without its
+/// directory and extension (gfx.wad -> gfx).
+fn default_out_dir(input: ref u8) ref u8 = trust {
+    val n: i64 = @strlen(input)
+    if n <= 0 {
+        return "wad_out"
+    }
+
+    val slash: mut i64 = -1
+    val dot: mut i64 = -1
+    for i = 0, i < n, i++ {
+        val c: u8 = @load8(@ptradd(input, i as usize))
+        if c == 47 || c == 92 {
+            slash = i
+            dot = -1
+        } elif c == 46 {
+            dot = i
+        }
+    }
+
+    val start: i64 = slash + 1
+    val end: mut i64 = n
+    if dot > slash {
+        end = dot
+    }
+    val len: i64 = end - start
+    if len <= 0 {
+        return "wad_out"
+    }
+
+    val out: ref u8 = @alloc(len + 1) as ref u8
+    if out == none {
+        return "wad_out"
+    }
+    @memcpy(out, @ptradd(input, start as usize), len as usize)
+    @store8(@ptradd(out, len as usize), 0)
+    return out
+}
+
+fn crc32(data: ref u8, start: i64, len: i64) u32 = trust {
+    val mask: u64 = 0xFFFFFFFF as u64
+    val c: mut u64 = mask
+    for i = 0, i < len, i++ {
+        c = (c ^ (u8_at(data, start + i) as u64)) & mask
+        for j = 0, j < 8, j++ {
+            if (c & 1) != 0 {
+                c = ((c >> 1) ^ (0xEDB88320 as u64)) & mask
+            } else {
+                c = (c >> 1) & mask
+            }
+        }
+    }
+    return ((c ^ mask) & mask) as u32
+}
+
+fn adler32(data: ref u8, len: i64) u32 = trust {
+    val a: mut u32 = 1
+    val b: mut u32 = 0
+    for i = 0, i < len, i++ {
+        a = (a + (u8_at(data, i) as u32)) % 65521
+        b = (b + a) % 65521
+    }
+    return (b << 16) | a
+}
+
+/// Encode indexed pixels as a PNG. `use_alpha` makes palette index 255
+/// transparent, which is the convention for Quake/Half-Life qpic images.
+/// The PNG uses only uncompressed DEFLATE blocks, so it needs no zlib decoder.
+fn encode_png(
+    out_path: ref u8,
+    pixels: ref u8,
+    width: i64,
+    height: i64,
+    palette: ref u8,
+    palette_colors: i64,
+    use_alpha: bool
+) bool = trust {
+    if width <= 0 || height <= 0 || width > 16384 || height > 16384 {
+        return false
+    }
+    if palette == none || palette_colors <= 0 {
+        return false
+    }
+
+    val channels: mut i64 = 3
+    if use_alpha {
+        channels = 4
+    }
+
+    val row_bytes: i64 = 1 + width * channels
+    val raw_len: i64 = row_bytes * height
+    val raw: ref u8 = @alloc(raw_len) as ref u8
+    if raw == none {
+        return false
+    }
+
+    val p: mut i64 = 0
+    for y = 0, y < height, y++ {
+        @store8(@ptradd(raw, p as usize), 0) // PNG filter: none
+        p++
+        for x = 0, x < width, x++ {
+            val idx: u8 = @load8(@ptradd(pixels, (y * width + x) as usize))
+            val pi: i64 = idx as i64
+            if pi < palette_colors {
+                put8(raw, p, u8_at(palette, pi * 3))
+                put8(raw, p + 1, u8_at(palette, pi * 3 + 1))
+                put8(raw, p + 2, u8_at(palette, pi * 3 + 2))
+            } else {
+                put8(raw, p, 0)
+                put8(raw, p + 1, 0)
+                put8(raw, p + 2, 0)
+            }
+            p += 3
+
+            if use_alpha {
+                if idx == 255 {
+                    put8(raw, p, 0)
+                } else {
+                    put8(raw, p, 255)
+                }
+                p++
+            }
+        }
+    }
+
+    val blocks: mut i64 = raw_len / 65535
+    if raw_len % 65535 != 0 {
+        blocks++
+    }
+    if blocks == 0 {
+        blocks = 1
+    }
+
+    val zlib_len: i64 = 2 + raw_len + blocks * 5 + 4
+    val total: i64 = 57 + zlib_len
+    val out: ref u8 = @alloc(total) as ref u8
+    if out == none {
+        @free(raw as ref void)
+        return false
+    }
+
+    put8(out, 0, 137)
+    put8(out, 1, 80)
+    put8(out, 2, 78)
+    put8(out, 3, 71)
+    put8(out, 4, 13)
+    put8(out, 5, 10)
+    put8(out, 6, 26)
+    put8(out, 7, 10)
+
+    put32be(out, 8, 13 as u32)
+    put8(out, 12, 73)  // I
+    put8(out, 13, 72)  // H
+    put8(out, 14, 68)  // D
+    put8(out, 15, 82)  // R
+    put32be(out, 16, width as u32)
+    put32be(out, 20, height as u32)
+    put8(out, 24, 8)   // bit depth
+    if use_alpha {
+        put8(out, 25, 6) // RGBA
+    } else {
+        put8(out, 25, 2) // RGB
+    }
+    put8(out, 26, 0)   // compression
+    put8(out, 27, 0)   // filter
+    put8(out, 28, 0)   // interlace
+    put32be(out, 29, crc32(out, 12, 17))
+
+    put32be(out, 33, zlib_len as u32)
+    put8(out, 37, 73)  // I
+    put8(out, 38, 68)  // D
+    put8(out, 39, 65)  // A
+    put8(out, 40, 84)  // T
+
+    val z: mut i64 = 41
+    put8(out, z, 0x78)
+    z++
+    put8(out, z, 0x01)
+    z++
+
+    val raw_off: mut i64 = 0
+    for b = 0, b < blocks, b++ {
+        val remaining: i64 = raw_len - raw_off
+        val blen: mut i64 = remaining
+        if remaining > 65535 {
+            blen = 65535
+        }
+
+        if b == blocks - 1 {
+            put8(out, z, 1) // final block
+        } else {
+            put8(out, z, 0)
+        }
+        z++
+        put16le(out, z, blen as u16)
+        z += 2
+        put16le(out, z, (65535 - blen) as u16)
+        z += 2
+        if blen > 0 {
+            @memcpy(@ptradd(out, z as usize), @ptradd(raw, raw_off as usize), blen as usize)
+        }
+        z += blen
+        raw_off += blen
+    }
+
+    put32be(out, z, adler32(raw, raw_len))
+    z += 4
+    put32be(out, 41 + zlib_len, crc32(out, 37, 4 + zlib_len))
+
+    // IEND chunk.
+    val iend: i64 = 45 + zlib_len
+    put32be(out, iend, 0 as u32)
+    put8(out, iend + 4, 73) // I
+    put8(out, iend + 5, 69) // E
+    put8(out, iend + 6, 78) // N
+    put8(out, iend + 7, 68) // D
+    put32be(out, iend + 8, 0xAE426082 as u32)
+
+    val success: bool = fs.write_all_bytes(out_path, out as ref void, total)
+    @free(raw as ref void)
+    @free(out as ref void)
+    return success
+}
+
+/// Shared RGB palette selection for a WAD2 image. Prefer the archive palette,
+/// then fall back to a palette appended to the lump itself.
+fn wad2_palette(
+    data: ref u8,
+    lump_pos: i64,
+    lump_size: i64,
+    palette_rel: i64,
+    archive_palette: ref u8,
+    archive_palette_len: i64
+) ref u8 = trust {
+    if archive_palette != none && archive_palette_len >= 768 {
+        return archive_palette
+    }
+    if range_ok(lump_size, palette_rel, 768) {
+        return @ptradd(data, (lump_pos + palette_rel) as usize)
+    }
+    return none
+}
+
+fn decode_miptex(
+    data: ref u8,
+    data_len: i64,
+    lump_pos: i64,
+    lump_size: i64,
+    wad3: bool,
+    archive_palette: ref u8,
+    archive_palette_len: i64,
+    out_dir: ref u8,
+    name: ref u8
+) bool = trust {
+    if lump_size < 40 || !range_ok(data_len, lump_pos, lump_size) {
+        return false
+    }
+
+    val width: i64 = u32_at(data, lump_pos + 16) as i64
+    val height: i64 = u32_at(data, lump_pos + 20) as i64
+    if width <= 0 || height <= 0 || width > 16384 || height > 16384 {
+        return false
+    }
+
+    val mip0_size: i64 = width * height
+    val mip1_size: i64 = (width / 2) * (height / 2)
+    val mip2_size: i64 = (width / 4) * (height / 4)
+    val mip3_size: i64 = (width / 8) * (height / 8)
+
+    val rel0: i64 = u32_at(data, lump_pos + 24) as i64
+    val mip0_rel: mut i64 = 40
+    if rel0 > 0 && rel0 < lump_size {
+        mip0_rel = rel0
+    }
+    if !range_ok(lump_size, mip0_rel, mip0_size) {
+        return false
+    }
+
+    val rel3: i64 = u32_at(data, lump_pos + 36) as i64
+    val mip3_rel: mut i64 = mip0_rel + mip0_size + mip1_size + mip2_size
+    if rel3 > 0 && rel3 < lump_size {
+        mip3_rel = rel3
+    }
+    val palette_rel: i64 = mip3_rel + mip3_size
+
+    val palette: mut ref u8 = none
+    val palette_colors: mut i64 = 0
+
+    if wad3 {
+        if !range_ok(lump_size, palette_rel, 2) {
+            return false
+        }
+        val colors: i64 = u16_at(data, lump_pos + palette_rel) as i64
+        val ncolors: mut i64 = colors
+        if colors <= 0 || colors > 256 {
+            ncolors = 256
+        }
+        val palette_bytes: i64 = ncolors * 3
+        if !range_ok(lump_size, palette_rel + 2, palette_bytes) {
+            return false
+        }
+        palette = @ptradd(data, (lump_pos + palette_rel + 2) as usize)
+        palette_colors = ncolors
+    } else {
+        palette = wad2_palette(
+            data, lump_pos, lump_size, palette_rel, archive_palette, archive_palette_len
+        )
+        palette_colors = 256
+    }
+
+    if palette == none {
+        return false
+    }
+
+    val out_path: ref u8 = png_path(out_dir, name)
+    if out_path == none {
+        return false
+    }
+    val success: bool = encode_png(
+        out_path,
+        @ptradd(data, (lump_pos + mip0_rel) as usize),
+        width,
+        height,
+        palette,
+        palette_colors,
+        false
+    )
+    @free(out_path as ref void)
+    return success
+}
+
+fn decode_qpic(
+    data: ref u8,
+    data_len: i64,
+    lump_pos: i64,
+    lump_size: i64,
+    wad3: bool,
+    archive_palette: ref u8,
+    archive_palette_len: i64,
+    out_dir: ref u8,
+    name: ref u8
+) bool = trust {
+    if lump_size < 8 || !range_ok(data_len, lump_pos, lump_size) {
+        return false
+    }
+
+    val width: i64 = u32_at(data, lump_pos) as i64
+    val height: i64 = u32_at(data, lump_pos + 4) as i64
+    if width <= 0 || height <= 0 || width > 16384 || height > 16384 {
+        return false
+    }
+
+    val pixel_size: i64 = width * height
+    if !range_ok(lump_size, 8, pixel_size) {
+        return false
+    }
+
+    val palette: mut ref u8 = none
+    val palette_colors: mut i64 = 0
+
+    if wad3 {
+        val colors_rel: i64 = 8 + pixel_size
+        if !range_ok(lump_size, colors_rel, 2) {
+            return false
+        }
+        val colors: i64 = u16_at(data, lump_pos + colors_rel) as i64
+        val ncolors: mut i64 = colors
+        if colors <= 0 || colors > 256 {
+            ncolors = 256
+        }
+        if !range_ok(lump_size, colors_rel + 2, ncolors * 3) {
+            return false
+        }
+        palette = @ptradd(data, (lump_pos + colors_rel + 2) as usize)
+        palette_colors = ncolors
+    } else {
+        if archive_palette == none || archive_palette_len < 768 {
+            return false
+        }
+        palette = archive_palette
+        palette_colors = 256
+    }
+
+    val out_path: ref u8 = png_path(out_dir, name)
+    if out_path == none {
+        return false
+    }
+    val success: bool = encode_png(
+        out_path,
+        @ptradd(data, (lump_pos + 8) as usize),
+        width,
+        height,
+        palette,
+        palette_colors,
+        true
+    )
+    @free(out_path as ref void)
+    return success
+}
+
+fn decode_flat(
+    data: ref u8,
+    data_len: i64,
+    lump_pos: i64,
+    lump_size: i64,
+    width: i64,
+    height: i64,
+    archive_palette: ref u8,
+    archive_palette_len: i64,
+    out_dir: ref u8,
+    name: ref u8
+) bool = trust {
+    val pixel_size: i64 = width * height
+    if pixel_size <= 0 || !range_ok(data_len, lump_pos, pixel_size) {
+        return false
+    }
+    if !range_ok(lump_size, 0, pixel_size) {
+        return false
+    }
+    if archive_palette == none || archive_palette_len < 768 {
+        return false
+    }
+
+    val out_path: ref u8 = png_path(out_dir, name)
+    if out_path == none {
+        return false
+    }
+    val success: bool = encode_png(
+        out_path,
+        @ptradd(data, lump_pos as usize),
+        width,
+        height,
+        archive_palette,
+        256,
+        false
+    )
+    @free(out_path as ref void)
+    return success
+}
+
+pub fn extract_wad(data: ref u8, data_len: i64, out_dir: ref u8) i32 = trust {
+    if data_len < 12 {
+        return -1
+    }
+
+    if u8_at(data, 0) != 87 || u8_at(data, 1) != 65 || u8_at(data, 2) != 68 {
+        return -1
+    }
+    val id: u8 = u8_at(data, 3)
+    if id != 50 && id != 51 {
+        return -1
+    }
+    val wad3: bool = id == 51
+
+    val num_lumps: i64 = u32_at(data, 4) as i64
+    val dir_pos: i64 = u32_at(data, 8) as i64
+    if num_lumps <= 0 || num_lumps > 1000000 {
+        return -1
+    }
+    if !range_ok(data_len, dir_pos, num_lumps * 32) {
+        return -1
+    }
+
+    val archive_palette: mut ref u8 = none
+    val archive_palette_len: mut i64 = 0
+    if !wad3 {
+        for i = 0, i < num_lumps, i++ {
+            val entry: i64 = dir_pos + i * 32
+            if u8_at(data, entry + 12) == TYP_PALETTE {
+                val pos: i64 = u32_at(data, entry) as i64
+                val size: i64 = u32_at(data, entry + 8) as i64
+                if size >= 768 && range_ok(data_len, pos, size) {
+                    archive_palette = @ptradd(data, pos as usize)
+                    archive_palette_len = size
+                    break
+                }
+            }
+        }
+
+        if archive_palette == none && FALLBACK_PALETTE_LEN >= 768 {
+            archive_palette = FALLBACK_PALETTE
+            archive_palette_len = FALLBACK_PALETTE_LEN as i64
+        }
+    }
+
+    fs.mkdir_path(out_dir)
+
+    val made: mut i64 = 0
+    val skipped: mut i64 = 0
+
+    for i = 0, i < num_lumps, i++ {
+        val entry: i64 = dir_pos + i * 32
+        val pos: i64 = u32_at(data, entry) as i64
+        val disk_size: i64 = u32_at(data, entry + 4) as i64
+        val mem_size: i64 = u32_at(data, entry + 8) as i64
+        val typ: u8 = u8_at(data, entry + 12)
+        val compression: u8 = u8_at(data, entry + 13)
+        val lump_size: mut i64 = disk_size
+        if mem_size > 0 {
+            lump_size = mem_size
+        }
+        val name: ref u8 = lump_name(data, entry)
+
+        if name == none {
+            skipped++
+            continue
+        }
+
+        if compression != 0 {
+            skipped++
+        } elif lump_size <= 0 || !range_ok(data_len, pos, disk_size) ||
+        !range_ok(data_len, pos, lump_size) {
+            skipped++
+        } else {
+            val handled: mut bool = false
+            val success: mut bool = false
+
+            if wad3 {
+                if typ == TYP_MIPTEX3 || typ == TYP_SPRAY {
+                    handled = true
+                    success = decode_miptex(
+                        data, data_len, pos, lump_size, true,
+                        none, 0, out_dir, name
+                    )
+                } elif typ == TYP_QPIC {
+                    handled = true
+                    success = decode_qpic(
+                        data, data_len, pos, lump_size, true,
+                        none, 0, out_dir, name
+                    )
+                }
+            } else {
+                if typ == TYP_MIPTEX2 {
+                    handled = true
+                    success = decode_miptex(
+                        data, data_len, pos, lump_size, false,
+                        archive_palette, archive_palette_len, out_dir, name
+                    )
+                } elif typ == TYP_QPIC {
+                    handled = true
+                    success = decode_qpic(
+                        data, data_len, pos, lump_size, false,
+                        archive_palette, archive_palette_len, out_dir, name
+                    )
+                } elif typ == TYP_FLAT {
+                    handled = true
+                    if lump_size == 320 * 200 {
+                        success = decode_flat(
+                            data, data_len, pos, lump_size, 320, 200,
+                            archive_palette, archive_palette_len, out_dir, name
+                        )
+                    } elif lump_size == 128 * 128 {
+                        success = decode_flat(
+                            data, data_len, pos, lump_size, 128, 128,
+                            archive_palette, archive_palette_len, out_dir, name
+                        )
+                    }
+                }
+            }
+
+            if handled {
+                if success {
+                    made++
+                } else {
+                    skipped++
+                    stdio.eprint("warning: could not decode '{s}'\n", {name})
+                }
+            } else {
+                skipped++
+            }
+        }
+
+        @free(name as ref void)
+    }
+
+    stdio.print("sunmap: extracted {d} texture(s) from WAD into '{s}' ({d} lump(s) skipped).\n",
+        {made, out_dir, skipped})
+    return made as i32
+}
+
+
+/// Extract every decodable image lump from a WAD file on disk into `out_dir`.
+/// Returns the number of images written, or -1 if the file could not be read
+/// or is not a WAD2/WAD3 archive.
+pub fn extract_file(path: ref u8, out_dir: ref u8) i32 = trust {
+    val size_opt = fs.file_size(path)
+    val file_len: mut i64 = 0
+    match size_opt {
+        some size => {
+            file_len = size
+        }
+        none => {
+            return -1
+        }
+    }
+    if file_len < 12 {
+        return -1
+    }
+    val data_opt = fs.read_all_raw(path)
+    match data_opt {
+        none => {
+            return -1
+        }
+        some raw => {
+            val data: ref u8 = raw as ref u8
+            val made = extract_wad(data, file_len, out_dir)
+            @free(data as ref void)
+            return made
+        }
+    }
+}

@@ -23,11 +23,11 @@ fn mime_for(path: ref u8) ref u8 = {
     return "image/png"
 }
 
-fn texmap_at(tm: mut ref [256]i32, i: i32) i32 = {
+fn texmap_at(tm: mut ref [1024]i32, i: i32) i32 = {
     return mem.i32_at(tm as ref void, i)
 }
 
-fn texmap_set(tm: mut ref [256]i32, i: i32, v: i32) void = {
+fn texmap_set(tm: mut ref [1024]i32, i: i32, v: i32) void = {
     mem.set_i32(tm as ref void, i, v)
 }
 
@@ -333,7 +333,7 @@ fn build(w: mut ref world.World, glb: bool, json_out: mut ref buf.Buf) bool = tr
     }
 
     // images and textures
-    val texmap: mut [256]i32 = @zeroed
+    val texmap: mut [1024]i32 = @zeroed
     val img_count: mut i32 = 0
     val i: mut i32 = 0
     for {

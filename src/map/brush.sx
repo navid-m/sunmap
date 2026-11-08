@@ -7,6 +7,7 @@ pub val MAX_VERTS: i32 = 192
 pub type Brush = {
     face_count: mut i32
     faces: mut ref math.Plane
+    face_tex: mut ref i32
     vert_count: mut i32
     verts: mut ref math.Vec3
     order_start: mut ref i32
@@ -32,6 +33,10 @@ pub fn init(b: mut ref Brush) void = {
     if b.faces == none {
         b.faces = mem.allocate(MAX_FACES as i64 * @sizeof(math.Plane) as i64) as ref math.Plane
     }
+    if b.face_tex == none {
+        b.face_tex = mem.allocate(MAX_FACES as i64 * 4) as ref i32
+        mem.zero(b.face_tex as ref void, MAX_FACES as i64 * 4)
+    }
     if b.verts == none {
         b.verts = mem.allocate(MAX_VERTS as i64 * @sizeof(math.Vec3) as i64) as ref math.Vec3
     }
@@ -50,6 +55,10 @@ pub fn dispose(b: mut ref Brush) void = {
     if b.faces != none {
         mem.release(b.faces as ref void)
         b.faces = none
+    }
+    if b.face_tex != none {
+        mem.release(b.face_tex as ref void)
+        b.face_tex = none
     }
     if b.verts != none {
         mem.release(b.verts as ref void)
@@ -92,6 +101,11 @@ pub fn copy(dst: mut ref Brush, src: ref Brush) void = {
         MAX_FACES as i64 * @sizeof(math.Plane) as i64
     )
     mem.mem_copy(
+        dst.face_tex as ref void,
+        src.face_tex as ref void,
+        MAX_FACES as i64 * 4
+    )
+    mem.mem_copy(
         dst.verts as ref void,
         src.verts as ref void,
         MAX_VERTS as i64 * @sizeof(math.Vec3) as i64
@@ -107,6 +121,14 @@ pub fn face(b: mut ref Brush, i: i32) ref math.Plane = {
 
 pub fn vert(b: mut ref Brush, i: i32) ref math.Vec3 = {
     return mem.ptr(b.verts as ref void, i as i64 * @sizeof(math.Vec3) as i64) as ref math.Vec3
+}
+
+pub fn face_texture(b: mut ref Brush, i: i32) i32 = {
+    return mem.i32_at(b.face_tex as ref void, i)
+}
+
+pub fn set_face_texture(b: mut ref Brush, i: i32, value: i32) void = {
+    mem.set_i32(b.face_tex as ref void, i, value)
 }
 
 pub fn order_at(b: mut ref Brush, i: i32) i32 = {
@@ -151,6 +173,7 @@ pub fn add_plane(b: mut ref Brush, n: math.Vec3, d: f64) bool = {
     val f: mut ref math.Plane = face(b, b.face_count)
     f.normal = n
     f.dist = d
+    set_face_texture(b, b.face_count, -1)
     b.face_count++
     return true
 }
@@ -358,6 +381,7 @@ pub fn rebuild(b: mut ref Brush) void = {
                     val src = face(b, read)
                     dst.normal = src.normal
                     dst.dist = src.dist
+                    set_face_texture(b, write, face_texture(b, read))
                 }
                 write++
             }

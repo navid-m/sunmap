@@ -1,0 +1,530 @@
+/// Quake / Valve 220 .map importer.
+///
+/// Reads worldspawn brushes and brush-entity brushes, resolves textures from
+/// the local texture shelf, and extracts any WAD archives referenced by the
+/// map (or found next to it) through io/wad.sx.
+
+val math       = use("../core/math.sx")
+val mem        = use("../core/mem.sx")
+val str        = use("../core/strutil.sx")
+val world      = use("../map/world.sx")
+val brush      = use("../map/brush.sx")
+val csg        = use("../map/csg.sx")
+val texture    = use("../map/texture.sx")
+val wad        = use("./wad.sx")
+val fs         = use("std/fs")
+val stdio      = use("std/stdio")
+val allocators = use("std/allocators")
+
+extern (C, header) fn atof(s: ref u8) f64 = "atof"
+
+type Reader = {
+    data: ref u8
+    length: i64
+    pos: mut i64
+}
+
+fn skip_space(r: mut ref Reader) void = {
+    for {
+        if r.pos >= r.length {
+            break
+        }
+        val c = mem.u8_at(r.data, r.pos as i32)
+        if c == 32 || c == 9 || c == 10 || c == 13 {
+            r.pos++
+        } elif c == 47 && r.pos + 1 < r.length &&
+        mem.u8_at(r.data, (r.pos + 1) as i32) == 47 {
+            r.pos = r.pos + 2
+            for {
+                if r.pos >= r.length {
+                    break
+                }
+                val d = mem.u8_at(r.data, r.pos as i32)
+                if d == 10 {
+                    r.pos++
+                    break
+                }
+                r.pos++
+            }
+        } else {
+            break
+        }
+    }
+}
+
+fn next_token(r: mut ref Reader, out: ref u8, cap: i32) bool = {
+    skip_space(r)
+    mem.set_u8(out, 0, 0)
+    if r.pos >= r.length {
+        return false
+    }
+    val written: mut i32 = 0
+    val first = mem.u8_at(r.data, r.pos as i32)
+    if first == 34 {
+        r.pos++
+        for {
+            if r.pos >= r.length {
+                break
+            }
+            val c = mem.u8_at(r.data, r.pos as i32)
+            if c == 34 {
+                r.pos++
+                break
+            }
+            if written < cap - 1 {
+                mem.set_u8(out, written, c)
+                written++
+            }
+            r.pos++
+        }
+    } else {
+        for {
+            if r.pos >= r.length {
+                break
+            }
+            val c = mem.u8_at(r.data, r.pos as i32)
+            if c == 32 || c == 9 || c == 10 || c == 13 {
+                break
+            }
+            if written < cap - 1 {
+                mem.set_u8(out, written, c)
+                written++
+            }
+            r.pos++
+        }
+    }
+    mem.set_u8(out, written, 0)
+    return true
+}
+
+fn skip_token(r: mut ref Reader) void = {
+    val tmp: mut [128]u8 = @zeroed
+    next_token(r, @addr(tmp) as ref u8, 128)
+}
+
+fn skip_tokens(r: mut ref Reader, count: i32) void = {
+    val i: mut i32 = 0
+    for {
+        if i >= count {
+            break
+        }
+        skip_token(r)
+        i++
+    }
+}
+
+fn read_f64(r: mut ref Reader) f64 = {
+    val tmp: mut [64]u8 = @zeroed
+    if next_token(r, @addr(tmp) as ref u8, 64) {
+        return trust atof(@addr(tmp) as ref u8)
+    }
+    return 0.0
+}
+
+fn read_point(r: mut ref Reader) math.Vec3 = {
+    val x = read_f64(r)
+    val y = read_f64(r)
+    val z = read_f64(r)
+    skip_token(r) // ")"
+    return math.v3(x, y, z)
+}
+
+fn copy_range(dst: ref u8, cap: i32, src: ref u8, start: i64, end: i64) void = {
+    val count: mut i64 = end - start
+    if count < 0 {
+        count = 0
+    }
+    if count > (cap - 1) as i64 {
+        count = (cap - 1) as i64
+    }
+    val i: mut i64 = 0
+    for {
+        if i >= count {
+            break
+        }
+        mem.set_u8(dst, i as i32, mem.u8_at(src, (start + i) as i32))
+        i++
+    }
+    mem.set_u8(dst, count as i32, 0)
+}
+
+fn dir_into(path: ref u8, out: ref u8, cap: i32) void = {
+    val n = str.len(path)
+    val last: mut i64 = -1
+    val i: mut i64 = 0
+    for {
+        if i >= n {
+            break
+        }
+        val c = mem.u8_at(path, i as i32)
+        if c == 47 || c == 92 {
+            last = i
+        }
+        i++
+    }
+    if last < 0 {
+        str.copy(out, cap, ".")
+    } elif last == 0 {
+        str.copy(out, cap, "/")
+    } else {
+        copy_range(out, cap, path, 0, last)
+    }
+}
+
+fn join_path(out: ref u8, cap: i32, dir: ref u8, name: ref u8) void = {
+    @snprintf(out, cap, "{s}/{s}", {dir, name})
+}
+
+fn file_exists(path: ref u8) bool = trust {
+    val sz = fs.file_size(path)
+    match sz {
+        some _ => {
+            return true
+        }
+        none => {
+            return false
+        }
+    }
+}
+
+fn try_texture_stem(w: mut ref world.World, stem: ref u8) i32 = trust {
+    val path: mut [512]u8 = @zeroed
+    val p = @addr(path) as ref u8
+    @snprintf(p, 512, "textures/{s}.png", {stem})
+    if file_exists(p) {
+        val t = texture.load_file(p)
+        if t.live {
+            val idx = world.add_texture(w, t)
+            if idx < 0 {
+                val tm: mut texture.Texture = t
+                texture.free(@addr(tm))
+            }
+            return idx
+        }
+    }
+    @snprintf(p, 512, "textures/{s}.tga", {stem})
+    if file_exists(p) {
+        val t = texture.load_file(p)
+        if t.live {
+            val idx = world.add_texture(w, t)
+            if idx < 0 {
+                val tm: mut texture.Texture = t
+                texture.free(@addr(tm))
+            }
+            return idx
+        }
+    }
+    @snprintf(p, 512, "textures/{s}.jpg", {stem})
+    if file_exists(p) {
+        val t = texture.load_file(p)
+        if t.live {
+            val idx = world.add_texture(w, t)
+            if idx < 0 {
+                val tm: mut texture.Texture = t
+                texture.free(@addr(tm))
+            }
+            return idx
+        }
+    }
+    @snprintf(p, 512, "textures/{s}.bmp", {stem})
+    if file_exists(p) {
+        val t = texture.load_file(p)
+        if t.live {
+            val idx = world.add_texture(w, t)
+            if idx < 0 {
+                val tm: mut texture.Texture = t
+                texture.free(@addr(tm))
+            }
+            return idx
+        }
+    }
+    return -1
+}
+
+fn resolve_texture(w: mut ref world.World, name: ref u8) i32 = trust {
+    val found = world.find_texture(w, name)
+    if found >= 0 {
+        return found
+    }
+    val safe: mut [128]u8 = @zeroed
+    str.sanitize(@addr(safe) as ref u8, 128, name)
+    val idx = try_texture_stem(w, name)
+    if idx >= 0 {
+        return idx
+    }
+    return try_texture_stem(w, @addr(safe) as ref u8)
+}
+
+fn extract_segment(seg: ref u8, mapdir: ref u8) i32 = trust {
+    val cand: mut [512]u8 = @zeroed
+    val c = @addr(cand) as ref u8
+    if file_exists(seg) {
+        return wad.extract_file(seg, "textures")
+    }
+    join_path(c, 512, mapdir, seg)
+    if file_exists(c) {
+        return wad.extract_file(c, "textures")
+    }
+    val base = str.basename(seg)
+    join_path(c, 512, mapdir, base)
+    if file_exists(c) {
+        return wad.extract_file(c, "textures")
+    }
+    str.copy(c, 512, base)
+    if file_exists(c) {
+        return wad.extract_file(c, "textures")
+    }
+    return 0
+}
+
+fn extract_wad_list(value: ref u8, mapdir: ref u8) i32 = trust {
+    val n = str.len(value)
+    val seg: mut [512]u8 = @zeroed
+    val total: mut i32 = 0
+    val start: mut i64 = 0
+    val i: mut i64 = 0
+    for {
+        if i > n {
+            break
+        }
+        val at_end = i == n
+        val c: mut u8 = 0
+        if !at_end {
+            c = mem.u8_at(value, i as i32)
+        }
+        if at_end || c == 59 {
+            if i > start {
+                copy_range(@addr(seg) as ref u8, 512, value, start, i)
+                val slen = str.len(@addr(seg) as ref u8)
+                val trimmed: mut [512]u8 = @zeroed
+                val ts: mut i64 = 0
+                val te: mut i64 = slen
+                for {
+                    if ts >= te {
+                        break
+                    }
+                    if mem.u8_at(@addr(seg) as ref u8, ts as i32) != 32 &&
+                    mem.u8_at(@addr(seg) as ref u8, ts as i32) != 9 {
+                        break
+                    }
+                    ts++
+                }
+                for {
+                    if te <= ts {
+                        break
+                    }
+                    if mem.u8_at(@addr(seg) as ref u8, (te - 1) as i32) != 32 &&
+                    mem.u8_at(@addr(seg) as ref u8, (te - 1) as i32) != 9 {
+                        break
+                    }
+                    te--
+                }
+                if te > ts {
+                    copy_range(@addr(trimmed) as ref u8, 512, @addr(seg) as ref u8, ts, te)
+                    total = total + extract_segment(@addr(trimmed) as ref u8, mapdir)
+                }
+            }
+            start = i + 1
+        }
+        i++
+    }
+    return total
+}
+
+fn extract_wads_from_text(data: ref u8, length: i64, mapdir: ref u8) i32 = trust {
+    val r: mut Reader = Reader{data: data, length: length, pos: 0}
+    val tok: mut [256]u8 = @zeroed
+    val depth: mut i32 = 0
+    val total: mut i32 = 0
+    for {
+        if !next_token(@addr(r), @addr(tok) as ref u8, 256) {
+            break
+        }
+        if str.eql(@addr(tok) as ref u8, "{") {
+            depth++
+        } elif str.eql(@addr(tok) as ref u8, "}") {
+            depth--
+            if depth < 0 {
+                depth = 0
+            }
+        } elif depth == 1 && str.eql(@addr(tok) as ref u8, "wad") {
+            val value: mut [1024]u8 = @zeroed
+            if next_token(@addr(r), @addr(value) as ref u8, 1024) {
+                total = total + extract_wad_list(@addr(value) as ref u8, mapdir)
+            }
+        }
+    }
+    return total
+}
+
+fn extract_wads_in_dir(mapdir: ref u8) i32 = trust {
+    val heap: allocators.HeapAllocator = @zeroed
+    val entries = fs.walk_dir_raw[allocators.HeapAllocator](heap, mapdir)
+    val total: mut i32 = 0
+    if entries is some list {
+        val n = @len(list)
+        val i: mut i64 = 0
+        for {
+            if i >= n as i64 {
+                break
+            }
+            val got = @get(list, i as usize)
+            if got is some entry {
+                val e = entry as ref u8
+                val ext = str.extension(e)
+                if str.eql(ext, ".wad") || str.eql(ext, ".WAD") {
+                    val path: mut [512]u8 = @zeroed
+                    join_path(@addr(path) as ref u8, 512, mapdir, e)
+                    total = total + wad.extract_file(@addr(path) as ref u8, "textures")
+                }
+            }
+            i++
+        }
+        @listfree(list)
+    }
+    return total
+}
+
+fn parse_face(r: mut ref Reader, b: mut ref brush.Brush, w: mut ref world.World) void = trust {
+    val p0 = read_point(r)
+    skip_token(r) // "("
+    val p1 = read_point(r)
+    skip_token(r) // "("
+    val p2 = read_point(r)
+
+    val name: mut [128]u8 = @zeroed
+    if !next_token(r, @addr(name) as ref u8, 128) {
+        return
+    }
+
+    // Quake .map plane points are clockwise when viewed from the front, so
+    // this ordering gives the outward normal.
+    val n = math.v3_normalize(
+        math.v3_cross(math.v3_sub(p2, p0), math.v3_sub(p1, p0))
+    )
+    val d = math.v3_dot(n, p0)
+
+    val ti = resolve_texture(w, @addr(name) as ref u8)
+    val before = b.face_count
+    brush.add_plane(b, n, d)
+    if b.face_count > before && ti >= 0 {
+        brush.set_face_texture(b, b.face_count - 1, ti)
+    }
+    if ti >= 0 && b.tex < 0 {
+        b.tex = ti
+    }
+
+    val marker: mut [32]u8 = @zeroed
+    if next_token(r, @addr(marker) as ref u8, 32) {
+        if str.eql(@addr(marker) as ref u8, "[") {
+            skip_tokens(r, 4)
+            skip_token(r) // "]"
+            skip_token(r) // "["
+            skip_tokens(r, 4)
+            skip_token(r) // "]"
+            skip_tokens(r, 3)
+        } else {
+            // Standard Quake: the marker is xoff; skip yoff, rot and scales.
+            skip_tokens(r, 4)
+        }
+    }
+}
+
+/// Import a .map file into the world. Returns the number of brushes added, or
+/// -1 if the file could not be read.
+pub fn import_file(w: mut ref world.World, path: ref u8) i32 = trust {
+    val size_opt = fs.file_size(path)
+    val file_len: mut i64 = 0
+    match size_opt {
+        some size => {
+            file_len = size
+        }
+        none => {
+            return -1
+        }
+    }
+    if file_len <= 0 {
+        return -1
+    }
+    val data_opt = fs.read_all_raw(path)
+    val data: mut ref u8 = none
+    match data_opt {
+        some raw => {
+            data = raw as ref u8
+        }
+        none => {
+            return -1
+        }
+    }
+
+    val mapdir: mut [512]u8 = @zeroed
+    dir_into(path, @addr(mapdir) as ref u8, 512)
+
+    val made = extract_wads_from_text(data, file_len, @addr(mapdir) as ref u8)
+    val extra: mut i32 = 0
+    if made == 0 {
+        extra = extract_wads_in_dir(@addr(mapdir) as ref u8)
+    }
+    if made > 0 || extra > 0 {
+        world.load_textures(w, "textures")
+    }
+
+    val base = str.basename(path)
+    val stem: mut ref u8 = str.stem(base)
+    val safe: mut [64]u8 = @zeroed
+    str.sanitize(@addr(safe) as ref u8, 64, stem)
+    world.copy_name(w, @addr(safe) as ref u8)
+    @free(stem as ref void)
+
+    val r: mut Reader = Reader{data: data, length: file_len, pos: 0}
+    val tok: mut [256]u8 = @zeroed
+    val depth: mut i32 = 0
+    val imported: mut i32 = 0
+    val pending: mut ref brush.Brush = none
+
+    for {
+        if !next_token(@addr(r), @addr(tok) as ref u8, 256) {
+            break
+        }
+        if str.eql(@addr(tok) as ref u8, "{") {
+            depth++
+            if depth == 2 {
+                pending = csg.new_brush()
+            }
+        } elif str.eql(@addr(tok) as ref u8, "}") {
+            if depth == 2 && pending != none {
+                brush.rebuild(pending)
+                if pending.valid {
+                    pending.selected = true
+                    if pending.tex < 0 {
+                        pending.tex = 0
+                    }
+                    val idx = world.add_brush(w, pending)
+                    if idx >= 0 {
+                        imported++
+                    } else {
+                        csg.free_brush(pending)
+                    }
+                } else {
+                    csg.free_brush(pending)
+                }
+                pending = none
+            }
+            depth--
+            if depth < 0 {
+                depth = 0
+            }
+        } elif depth == 2 && pending != none {
+            if str.eql(@addr(tok) as ref u8, "(") {
+                parse_face(@addr(r), pending, w)
+            }
+        }
+    }
+
+    if pending != none {
+        csg.free_brush(pending)
+    }
+    stdio.print("sunmap: imported {d} brush(es) from {s}\n", {imported, path})
+    @free(data as ref void)
+    return imported
+}

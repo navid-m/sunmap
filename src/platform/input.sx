@@ -17,6 +17,7 @@ pub val KEY_V: i32 = 118
 pub val KEY_B: i32 = 98
 pub val KEY_F: i32 = 102
 pub val KEY_H: i32 = 104
+pub val KEY_I: i32 = 105
 pub val KEY_S: i32 = 115
 pub val KEY_O: i32 = 111
 pub val KEY_E: i32 = 101

@@ -1,0 +1,36 @@
+/// Shared file-import entry point for dropped files, the command line, and the
+/// Import / Load buttons.
+
+val str       = use("../core/strutil.sx")
+val world     = use("../map/world.sx")
+val uistate   = use("../ui/state.sx")
+val mapimport = use("./mapimport.sx")
+val wadimport = use("./wad.sx")
+
+pub fn import_path(w: mut ref world.World, ui: mut ref uistate.UIState, path: ref u8) bool = trust {
+    val ext = str.extension(path)
+    if str.eql(ext, ".map") || str.eql(ext, ".MAP") {
+        val made = mapimport.import_file(w, path)
+        if made >= 0 {
+            uistate.set_status(ui, "Imported {d} brush(es) from {s}.", {made, str.basename(path)})
+        } else {
+            uistate.set_status(ui, "Could not import map {s}.", {path})
+        }
+        return true
+    }
+    if str.eql(ext, ".wad") || str.eql(ext, ".WAD") {
+        val made = wadimport.extract_file(path, "textures")
+        if made >= 0 {
+            world.load_textures(w, "textures")
+            uistate.set_status(
+                ui,
+                "Imported {d} texture(s) from {s}.",
+                {made, str.basename(path)}
+            )
+        } else {
+            uistate.set_status(ui, "Could not read WAD {s}.", {path})
+        }
+        return true
+    }
+    return false
+}

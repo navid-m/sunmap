@@ -16,8 +16,10 @@ val uistate  = use("./ui/state.sx")
 val appui    = use("./ui/ui.sx")
 val project  = use("./io/project.sx")
 val exporter = use("./io/export.sx")
+val importer = use("./io/importer.sx")
 val fs       = use("std/fs")
 val stdio    = use("std/stdio")
+val os       = use("std/os")
 
 type VertexHit = {
     brush: mut i32
@@ -582,6 +584,13 @@ fn handle_key(
     val shift = (mods & 3) != 0
     val ctrl = (mods & 0xC0) != 0
 
+    if ui.picker_open {
+        if sym == input.KEY_ESC {
+            uistate.close_picker(ui)
+        }
+        return
+    }
+
     if ui.editing_name {
         if sym == input.KEY_BACKSPACE {
             delete_name_char(w)
@@ -612,6 +621,10 @@ fn handle_key(
         } else {
             uistate.set_status(ui, "No saved project named {s}.", {world.name(w)})
         }
+        return
+    }
+    if ctrl && sym == input.KEY_I {
+        uistate.open_picker(ui, c.PICKER_IMPORT)
         return
     }
     if ctrl && sym == input.KEY_E {
@@ -770,7 +783,9 @@ fn process_events(
             inp.my = y
             inp.dx += xrel
             inp.dy += yrel
-            if ui.drag_kind == c.DRAG_LOOK {
+            if ui.picker_open {
+                // The file picker consumes mouse input while it is open.
+            } elif ui.drag_kind == c.DRAG_LOOK {
                 camera.look(cam, xrel as f64, yrel as f64)
             } elif ui.drag_kind == c.DRAG_PAN {
                 camera.pan(cam, xrel as f64, yrel as f64)
@@ -788,19 +803,19 @@ fn process_events(
             if button == sdl.SDL_BUTTON_RIGHT {
                 inp.right = true
                 inp.clicked_right = true
-                if !appui.over_ui(x, y, width, height) {
+                if !ui.picker_open && !appui.over_ui(x, y, width, height) {
                     ui.drag_kind = c.DRAG_LOOK
                     sdl.SDL_SetRelativeMouseMode(1)
                 }
             } elif button == sdl.SDL_BUTTON_MIDDLE {
                 inp.middle = true
-                if !appui.over_ui(x, y, width, height) {
+                if !ui.picker_open && !appui.over_ui(x, y, width, height) {
                     ui.drag_kind = c.DRAG_PAN
                 }
             } elif button == sdl.SDL_BUTTON_LEFT {
                 inp.left = true
                 inp.clicked_left = true
-                if !appui.over_ui(x, y, width, height) {
+                if !ui.picker_open && !appui.over_ui(x, y, width, height) {
                     viewport_down(w, cam, ui, inp, width, height)
                 }
             }
@@ -825,7 +840,7 @@ fn process_events(
             } elif button == sdl.SDL_BUTTON_LEFT {
                 inp.left = false
                 inp.released_left = true
-                if !appui.over_ui(x, y, width, height) {
+                if !ui.picker_open && !appui.over_ui(x, y, width, height) {
                     if ui.drag_kind != c.DRAG_LOOK && ui.drag_kind != c.DRAG_PAN {
                         viewport_up(w, ui)
                     }
@@ -834,7 +849,9 @@ fn process_events(
         } elif typ == sdl.SDL_MOUSEWHEEL {
             val wheel = mem.i32_off(ev, 20)
             inp.wheel = wheel
-            if appui.over_ui(inp.mx, inp.my, width, height) {
+            if ui.picker_open {
+                // Scrolling is handled by the picker overlay.
+            } elif appui.over_ui(inp.mx, inp.my, width, height) {
                 if inp.mx < c.LEFT_PANEL_W && inp.my > c.TOP_BAR_H {
                     ui.texture_scroll = ui.texture_scroll - wheel as f64 * 48.0
                     if ui.texture_scroll < 0.0 {
@@ -848,18 +865,24 @@ fn process_events(
             }
         } elif typ == sdl.SDL_DROPFILE {
             val ptr = mem.ptr_off(ev, 8) as ref u8
-            if ptr != none && str.is_image(ptr) {
-                val t = texture.import_file(ptr, "textures")
-                if t.live {
-                    val idx = world.add_texture(w, t)
-                    if idx >= 0 {
-                        ui.active_tex = idx
-                        uistate.set_status(ui, "Imported texture {s}.", {t.name})
+            if ptr != none {
+                if importer.import_path(w, ui, ptr) {
+                    sdl.SDL_free(ptr as ref void)
+                } elif str.is_image(ptr) {
+                    val t = texture.import_file(ptr, "textures")
+                    if t.live {
+                        val idx = world.add_texture(w, t)
+                        if idx >= 0 {
+                            ui.active_tex = idx
+                            uistate.set_status(ui, "Imported texture {s}.", {t.name})
+                        }
+                    } else {
+                        uistate.set_status(ui, "Could not import texture.", {})
                     }
+                    sdl.SDL_free(ptr as ref void)
                 } else {
-                    uistate.set_status(ui, "Could not import texture.", {})
+                    sdl.SDL_free(ptr as ref void)
                 }
-                sdl.SDL_free(ptr as ref void)
             }
         }
     }
@@ -886,6 +909,18 @@ pub fn run() i32 = trust {
     val ui: mut ref uistate.UIState = uistate.create()
 
     world.load_textures(w, "textures")
+
+    val args = os.get_args()
+    if @len(args) > 1 {
+        match @get(args, 1) {
+            some arg => {
+                if importer.import_path(w, ui, arg) {
+                    stdio.print("sunmap: imported {s}\n", {arg})
+                }
+            }
+            none => {}
+        }
+    }
 
     val inp: mut ref input.Input = @alloc(@sizeof(input.Input)) as ref input.Input
     mem.zero(inp as ref void, @sizeof(input.Input) as i64)
@@ -918,7 +953,7 @@ pub fn run() i32 = trust {
             last_ticks = now
 
             // camera noclip
-            if !ui.editing_name {
+            if !ui.editing_name && !ui.picker_open {
                 val fwd = input.key_down(input.SCAN_W)
                 val back = input.key_down(input.SCAN_S)
                 val left = input.key_down(input.SCAN_A)
@@ -935,7 +970,8 @@ pub fn run() i32 = trust {
             }
 
             // hover
-            if ui.drag_kind == c.DRAG_NONE && !appui.over_ui(inp.mx, inp.my, width, height) {
+            if ui.drag_kind == c.DRAG_NONE && !ui.picker_open &&
+            !appui.over_ui(inp.mx, inp.my, width, height) {
                 val ray = camera.screen_ray(cam, inp.mx, inp.my, width, height)
                 val hit = world.raycast(w, ray)
                 ui.hover_brush = hit.brush

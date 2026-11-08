@@ -1,3 +1,5 @@
+textures
+*.MAP
 SPECTRE_LANGUAGE_REFERENCE.md
 lib/
 std__*

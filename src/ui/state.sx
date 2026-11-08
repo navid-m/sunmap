@@ -38,6 +38,10 @@ pub type UIState = {
     texture_scroll: mut f64
     help_visible: mut bool
     export_flash: mut f64
+    picker_open: mut bool
+    picker_kind: mut i32
+    picker_dir: [1024]u8
+    picker_scroll: mut i32
 }
 
 pub fn create() ref UIState = {
@@ -62,6 +66,9 @@ pub fn create() ref UIState = {
     ui.status_time = 0.0
     ui.editing_name = false
     ui.help_visible = true
+    ui.picker_open = false
+    ui.picker_kind = c.PICKER_IMPORT
+    ui.picker_scroll = 0
     mem.zero(@addr(ui.preview) as ref void, @sizeof(brush.Brush) as i64)
     brush.init(@addr(ui.preview))
     set_status(ui, "Drop .png/.tga textures onto the window to add them.", {})
@@ -111,6 +118,17 @@ pub fn cancel_drag(ui: mut ref UIState) void = {
     ui.drag_vert = -1
     ui.drag_axis = c.AXIS_FREE
     ui.preview_valid = false
+}
+
+pub fn open_picker(ui: mut ref UIState, kind: i32) void = {
+    ui.picker_open = true
+    ui.picker_kind = kind
+    ui.picker_scroll = 0
+}
+
+pub fn close_picker(ui: mut ref UIState) void = {
+    ui.picker_open = false
+    ui.picker_scroll = 0
 }
 
 pub fn save_original(ui: mut ref UIState, b: mut ref brush.Brush) void = {

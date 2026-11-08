@@ -29,15 +29,20 @@ pub fn write_obj(w: mut ref world.World) bool = trust {
         }
         val b: mut ref brush.Brush = world.brush_at(w, bi)
         if b.valid {
-            val tex = world.texture_at(w, b.tex)
-            val mtl: mut [64]u8 = @zeroed
-            tex_material_name(tex, @addr(mtl) as ref u8, 64)
-            buf.append_fmt(@addr(obj), "usemtl {s}\n", {@addr(mtl) as ref u8})
             val fi: mut i32 = 0
             for {
                 if fi >= b.face_count {
                     break
                 }
+                val ft = brush.face_texture(b, fi)
+                val ti: mut i32 = b.tex
+                if ft >= 0 {
+                    ti = ft
+                }
+                val tex = world.texture_at(w, ti)
+                val mtl: mut [64]u8 = @zeroed
+                tex_material_name(tex, @addr(mtl) as ref u8, 64)
+                buf.append_fmt(@addr(obj), "usemtl {s}\n", {@addr(mtl) as ref u8})
                 val f = brush.face(b, fi)
                 val n = f.normal
                 val count = brush.order_len(b, fi)
@@ -50,8 +55,8 @@ pub fn write_obj(w: mut ref world.World) bool = trust {
                     val uv = brush.face_uv(
                         @deref(f),
                         p,
-                        world.texture_width(w, b.tex),
-                        world.texture_height(w, b.tex)
+                        world.texture_width(w, ti),
+                        world.texture_height(w, ti)
                     )
                     // Z-up world -> Y-up OBJ
                     @snprintf(@addr(tmp) as ref u8, 512, "v {f} {f} {f}\n", {p.x, p.z, -p.y})

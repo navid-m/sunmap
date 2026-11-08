@@ -16,33 +16,55 @@ spectre build release
 The bundled UI font is `assets/font.ttf` (DejaVu Sans). If it is missing the
 editor falls back to common system fonts.
 
+## Screenshots
+
+<img src="./.github/screen1.png">
+<img src="./.github/screen2.png">
+
 ## Controls
 
-| Input                       | Action                                              |
-| --------------------------- | --------------------------------------------------- |
-| `LMB` click (Select mode)   | Select a brush; click empty space to clear          |
-| `Shift` / `Ctrl` + `LMB`    | Add to / toggle brush selection                     |
+| Input                         | Action                                              |
+| ----------------------------- | --------------------------------------------------- |
+| `LMB` click (Select mode)     | Select a brush; click empty space to clear          |
+| `Shift` / `Ctrl` + `LMB`      | Add to / toggle brush selection                     |
 | `LMB` drag (Brush mode empty) | Draw a brush footprint (height is in the inspector) |
-| `LMB` drag (Brush mode brush) | Move the brush/selection on the horizontal plane  |
-| `Alt` + `LMB` drag          | Move the selection solely on the Y axis             |
-| `Shift` + `LMB` drag (face) | Extrude / intrude that face                         |
-| `1` / `2` / `3` / `4`       | Select / Brush / Face / Vertex mode                 |
-| `V`                         | Toggle vertex editing                               |
-| Arrows                      | Nudge selection by grid, `Shift` = 8×               |
-| `PageUp` / `PageDown`       | Nudge selection up/down by grid                     |
-| `Delete` / `Backspace`      | Delete selection                                    |
-| `Ctrl+H`                    | Hollow selection (wall thickness in inspector)      |
-| `Ctrl+A`                    | Select all                                          |
-| `Ctrl+S` / `Ctrl+O`         | Save / load `projects/<name>.sm`                    |
-| `Ctrl+E`                    | Export every format                                 |
-| `Ctrl+Q`                    | Quit                                                |
-| `RMB` drag                  | Look (relative mouse)                               |
-| `MMB` drag                  | Pan                                                 |
-| `WASD` / `Q` `E`            | Noclip; `Shift` = faster                            |
-| Wheel                       | Grid size (or scroll textures over the shelf)       |
-| `[` / `]`                   | Grid size down/up                                   |
-| `F1`                        | Toggle the controls overlay                         |
+| `LMB` drag (Brush mode brush) | Move the brush/selection on the horizontal plane    |
+| `Alt` + `LMB` drag            | Move the selection solely on the Y axis             |
+| `Shift` + `LMB` drag (face)   | Extrude / intrude that face                         |
+| `1` / `2` / `3` / `4`         | Select / Brush / Face / Vertex mode                 |
+| `V`                           | Toggle vertex editing                               |
+| Arrows                        | Nudge selection by grid, `Shift` = 8×               |
+| `PageUp` / `PageDown`         | Nudge selection up/down by grid                     |
+| `Delete` / `Backspace`        | Delete selection                                    |
+| `Ctrl+H`                      | Hollow selection (wall thickness in inspector)      |
+| `Ctrl+A`                      | Select all                                          |
+| `Ctrl+S` / `Ctrl+O`           | Save / load `projects/<name>.sm`                    |
+| `Ctrl+E`                      | Export every format                                 |
+| Drop `.map` / `.wad`          | Import a Quake map / WAD textures                   |
+| `Ctrl+Q`                      | Quit                                                |
+| `RMB` drag                    | Look (relative mouse)                               |
+| `MMB` drag                    | Pan                                                 |
+| `WASD` / `Q` `E`              | Noclip; `Shift` = faster                            |
+| Wheel                         | Grid size (or scroll textures over the shelf)       |
+| `[` / `]`                     | Grid size down/up                                   |
+| `F1`                          | Toggle the controls overlay                         |
 
 The top bar also has Select/Brush/Face/Vertex buttons, Save/Load, and Export. The
 inspector exposes grid, wall thickness, brush height, CSG operations, the
 active texture, and per-format export buttons.
+
+## Importing Quake maps and WADs
+
+Drop a `.map` file (Quake standard or Valve 220) onto the window to import its
+brushes and per-face textures. You can also pass a file on the command line:
+
+```sh
+./sunmap mymap.map
+./sunmap gfx/base.wad
+```
+
+When a map is imported, sunmap reads the `"wad"` keys from its entities and
+extracts the referenced WAD2/WAD3 textures into `textures/`. If the map does not
+reference a WAD, it looks for `.wad` files next to the map. Textures are matched
+case-insensitively by lump name and assigned per face. Importing is additive:
+the new brushes are selected so you can move or delete them immediately.

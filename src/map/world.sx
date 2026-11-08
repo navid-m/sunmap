@@ -18,7 +18,7 @@ pub type Hit = {
 pub type World = {
     brushes: [1024]ref brush.Brush
     brush_count: mut i32
-    textures: [256]ref texture.Texture
+    textures: [1024]ref texture.Texture
     texture_count: mut i32
     name: [64]u8
 }
@@ -41,6 +41,61 @@ pub fn brush_at(w: mut ref World, i: i32) ref brush.Brush = {
 
 pub fn texture_at(w: mut ref World, i: i32) ref texture.Texture = {
     return mem.load_ref(textures_ptr(w), i) as ref texture.Texture
+}
+
+fn lower_ascii(ch: u8) u8 = {
+    if ch >= 65 && ch <= 90 {
+        return (ch + 32) as u8
+    }
+    return ch
+}
+
+fn ci_eql(a: ref u8, b2: ref u8) bool = {
+    if a == none || b2 == none {
+        return false
+    }
+    val na = str.len(a)
+    if na != str.len(b2) {
+        return false
+    }
+    val i: mut i64 = 0
+    for {
+        if i >= na {
+            break
+        }
+        if lower_ascii(mem.u8_at(a, i as i32)) != lower_ascii(mem.u8_at(b2, i as i32)) {
+            return false
+        }
+        i++
+    }
+    return true
+}
+
+/// Find a texture by name. Names are compared case-insensitively and also in
+/// their sanitized form so Quake names like "*lava" can match "_lava.png".
+pub fn find_texture(w: mut ref World, name: ref u8) i32 = {
+    if name == none {
+        return -1
+    }
+    val wanted: mut [128]u8 = @zeroed
+    str.sanitize(@addr(wanted) as ref u8, 128, name)
+    val i: mut i32 = 0
+    for {
+        if i >= w.texture_count {
+            break
+        }
+        val t = texture_at(w, i)
+        if ci_eql(t.name, name) {
+            return i
+        }
+        val have: mut [128]u8 = @zeroed
+        str.sanitize(@addr(have) as ref u8, 128, t.name)
+        if ci_eql(@addr(have) as ref u8, @addr(wanted) as ref u8) {
+            return i
+        }
+        i++
+    }
+    return -1
 }
 
 pub fn create() ref World = trust {
@@ -269,6 +324,14 @@ pub fn apply_texture(w: mut ref World, tex: i32) void = {
         val b: mut ref brush.Brush = brush_at(w, i)
         if b.selected {
             b.tex = tex
+            val fi: mut i32 = 0
+            for {
+                if fi >= b.face_count {
+                    break
+                }
+                brush.set_face_texture(b, fi, -1)
+                fi++
+            }
         }
         i++
     }
@@ -583,7 +646,12 @@ pub fn load_textures(w: mut ref World, dir: ref u8) void = trust {
                     @snprintf(p, 512, "{s}/{s}", {dir, e})
                     val t = texture.load_file(p)
                     if t.live {
-                        add_texture(w, t)
+                        if find_texture(w, t.name) >= 0 {
+                            val tm: mut texture.Texture = t
+                            texture.free(@addr(tm))
+                        } else {
+                            add_texture(w, t)
+                        }
                     }
                 }
             }

@@ -76,7 +76,11 @@ pub fn subtract(
 
         val piece: mut ref brush.Brush = new_brush()
         brush.copy(piece, remaining)
+        val before_piece = piece.face_count
         brush.add_plane(piece, math.v3_neg(f.normal), -f.dist)
+        if piece.face_count > before_piece {
+            brush.set_face_texture(piece, piece.face_count - 1, brush.face_texture(cutter, fi))
+        }
         brush.rebuild(piece)
         if piece.valid {
             if !pool_push(pool, piece) {
@@ -87,7 +91,15 @@ pub fn subtract(
             free_brush(piece)
         }
 
+        val before_remaining = remaining.face_count
         brush.add_plane(remaining, f.normal, f.dist)
+        if remaining.face_count > before_remaining {
+            brush.set_face_texture(
+                remaining,
+                remaining.face_count - 1,
+                brush.face_texture(cutter, fi)
+            )
+        }
         brush.rebuild(remaining)
         fi++
     }
@@ -103,7 +115,11 @@ pub fn intersect(a: mut ref brush.Brush, b: mut ref brush.Brush, out: mut ref br
             break
         }
         val f = brush.face(a, i)
+        val before = out.face_count
         brush.add_plane(out, f.normal, f.dist)
+        if out.face_count > before {
+            brush.set_face_texture(out, out.face_count - 1, brush.face_texture(a, i))
+        }
         i++
     }
     i = 0
@@ -112,7 +128,11 @@ pub fn intersect(a: mut ref brush.Brush, b: mut ref brush.Brush, out: mut ref br
             break
         }
         val f = brush.face(b, i)
+        val before = out.face_count
         brush.add_plane(out, f.normal, f.dist)
+        if out.face_count > before {
+            brush.set_face_texture(out, out.face_count - 1, brush.face_texture(b, i))
+        }
         i++
     }
     brush.rebuild(out)
