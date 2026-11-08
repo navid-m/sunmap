@@ -10,8 +10,7 @@ editing, and first-class CSG.
 
 ```sh
 cd ../sunmap
-spectre build dev       # ./sunmap-dev
-spectre build release   # ./sunmap
+spectre build release
 ```
 
 The bundled UI font is `assets/font.ttf` (DejaVu Sans). If it is missing the
