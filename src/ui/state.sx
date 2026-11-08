@@ -30,6 +30,7 @@ pub type UIState = {
     drag_limit: mut f64
     drag_target: mut f64
     drag_last_delta: mut math.Vec3
+    drag_axis: mut i32
     drag_orig: [32]f64
     drag_orig_count: mut i32
     preview: mut brush.Brush
@@ -43,7 +44,7 @@ pub fn create() ref UIState = {
     val raw = mem.allocate(@sizeof(UIState) as i64)
     val ui: mut ref UIState = raw as ref UIState
     mem.zero(ui as ref void, @sizeof(UIState) as i64)
-    ui.mode = c.MODE_BRUSH
+    ui.mode = c.MODE_SELECT
     ui.grid = c.DEFAULT_GRID
     ui.wall = c.DEFAULT_WALL
     ui.height = c.DEFAULT_HEIGHT
@@ -57,6 +58,7 @@ pub fn create() ref UIState = {
     ui.drag_face = -1
     ui.drag_vert = -1
     ui.drag_last_delta = math.v3(0.0, 0.0, 0.0)
+    ui.drag_axis = c.AXIS_FREE
     ui.status_time = 0.0
     ui.editing_name = false
     ui.help_visible = true
@@ -87,7 +89,18 @@ pub fn mode_name(mode: i32) ref u8 = {
     if mode == c.MODE_VERTEX {
         return "Vertex"
     }
-    return "Brush"
+    if mode == c.MODE_BRUSH {
+        return "Brush"
+    }
+    return "Select"
+}
+
+pub fn set_mode(ui: mut ref UIState, mode: i32) void = {
+    ui.mode = mode
+    if mode != c.MODE_FACE {
+        ui.face_brush = -1
+        ui.face_index = -1
+    }
 }
 
 pub fn cancel_drag(ui: mut ref UIState) void = {
@@ -96,6 +109,7 @@ pub fn cancel_drag(ui: mut ref UIState) void = {
     ui.drag_brush = -1
     ui.drag_face = -1
     ui.drag_vert = -1
+    ui.drag_axis = c.AXIS_FREE
     ui.preview_valid = false
 }
 

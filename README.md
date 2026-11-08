@@ -20,11 +20,14 @@ editor falls back to common system fonts.
 
 | Input                       | Action                                              |
 | --------------------------- | --------------------------------------------------- |
-| `LMB` drag (empty grid)     | Draw a brush footprint (height is in the inspector) |
-| `LMB` drag (brush)          | Move the brush/selection on the horizontal plane    |
+| `LMB` click (Select mode)   | Select a brush; click empty space to clear          |
+| `Shift` / `Ctrl` + `LMB`    | Add to / toggle brush selection                     |
+| `LMB` drag (Brush mode empty) | Draw a brush footprint (height is in the inspector) |
+| `LMB` drag (Brush mode brush) | Move the brush/selection on the horizontal plane  |
+| `Alt` + `LMB` drag          | Move the selection solely on the Y axis             |
 | `Shift` + `LMB` drag (face) | Extrude / intrude that face                         |
+| `1` / `2` / `3` / `4`       | Select / Brush / Face / Vertex mode                 |
 | `V`                         | Toggle vertex editing                               |
-| `1` / `2` / `3`             | Brush / Face / Vertex mode                          |
 | Arrows                      | Nudge selection by grid, `Shift` = 8×               |
 | `PageUp` / `PageDown`       | Nudge selection up/down by grid                     |
 | `Delete` / `Backspace`      | Delete selection                                    |
@@ -40,6 +43,6 @@ editor falls back to common system fonts.
 | `[` / `]`                   | Grid size down/up                                   |
 | `F1`                        | Toggle the controls overlay                         |
 
-The top bar also has Brush/Face/Vertex buttons, Save/Load, and Export. The
+The top bar also has Select/Brush/Face/Vertex buttons, Save/Load, and Export. The
 inspector exposes grid, wall thickness, brush height, CSG operations, the
 active texture, and per-format export buttons.

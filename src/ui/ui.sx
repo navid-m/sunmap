@@ -197,13 +197,13 @@ fn draw_texture_panel(
             draw2d.text_centered(0, tx + cell_w / 2, ty + cell_w + 8, t.name, theme.TEXT())
             if inside(inp.mx, inp.my, tx, ty, cell_w, cell_h) && inp.clicked_left {
                 ui.active_tex = i
-                if world.selected_count(w) > 0 {
-                    world.apply_texture(w, i)
-                    uistate.set_status(ui, "Applied {s} to selection", {t.name})
-                } elif ui.face_brush >= 0 && ui.face_brush < w.brush_count {
+                if ui.mode == c.MODE_FACE && ui.face_brush >= 0 && ui.face_brush < w.brush_count {
                     val fb: mut ref brush.Brush = world.brush_at(w, ui.face_brush)
                     fb.tex = i
                     uistate.set_status(ui, "Applied {s} to face", {t.name})
+                } elif world.selected_count(w) > 0 {
+                    world.apply_texture(w, i)
+                    uistate.set_status(ui, "Applied {s} to selection", {t.name})
                 } else {
                     uistate.set_status(ui, "Active texture: {s}", {t.name})
                 }
@@ -451,6 +451,8 @@ fn draw_inspector(
     row += 16
     draw2d.text_draw(0, px, row, "WASD + Shift: noclip", theme.DIM())
     row += 16
+    draw2d.text_draw(0, px, row, "Alt+drag: move on Y axis", theme.DIM())
+    row += 16
     draw2d.text_draw(0, px, row, "V: vertex edit mode", theme.DIM())
 }
 
@@ -500,16 +502,17 @@ pub fn draw(
 
     val base_x: i32 = 6
     val seg_w: i32 = 74
-    if button(inp, base_x, 11, seg_w, 30, "Brush", ui.mode == c.MODE_BRUSH) {
-        ui.mode = c.MODE_BRUSH
-        ui.face_brush = -1
-        ui.face_index = -1
+    if button(inp, base_x, 11, seg_w, 30, "Select", ui.mode == c.MODE_SELECT) {
+        uistate.set_mode(ui, c.MODE_SELECT)
     }
-    if button(inp, base_x + seg_w + 4, 11, seg_w, 30, "Face", ui.mode == c.MODE_FACE) {
-        ui.mode = c.MODE_FACE
+    if button(inp, base_x + seg_w + 4, 11, seg_w, 30, "Brush", ui.mode == c.MODE_BRUSH) {
+        uistate.set_mode(ui, c.MODE_BRUSH)
     }
-    if button(inp, base_x + 2 * (seg_w + 4), 11, seg_w, 30, "Vertex", ui.mode == c.MODE_VERTEX) {
-        ui.mode = c.MODE_VERTEX
+    if button(inp, base_x + 2 * (seg_w + 4), 11, seg_w, 30, "Face", ui.mode == c.MODE_FACE) {
+        uistate.set_mode(ui, c.MODE_FACE)
+    }
+    if button(inp, base_x + 3 * (seg_w + 4), 11, seg_w, 30, "Vertex", ui.mode == c.MODE_VERTEX) {
+        uistate.set_mode(ui, c.MODE_VERTEX)
     }
 
     // top right actions
@@ -575,35 +578,42 @@ pub fn draw(
 
     // Help overlay
     if ui.help_visible {
-        val hw: i32 = 330
-        val hh: i32 = 176
+        val hw: i32 = 372
+        val hh: i32 = 194
         val hx = c.LEFT_PANEL_W + 18
         val hy = height - c.BOTTOM_BAR_H - hh - 18
         draw2d.rect(hx, hy, hw, hh, color.color(0.06, 0.07, 0.085, 0.88))
         draw2d.rect_outline(hx, hy, hw, hh, 1, theme.BORDER())
         draw2d.text_draw(1, hx + 14, hy + 10, "Controls", theme.TEXT())
-        draw2d.text_draw(0, hx + 14, hy + 40, "LMB drag        draw / move", theme.MUTED())
         draw2d.text_draw(
             0,
             hx + 14,
-            hy + 58,
-            "Shift + LMB     extrude / intrude face",
+            hy + 40,
+            "1 / 2 / 3 / 4   select / brush / face / vertex",
             theme.MUTED()
         )
-        draw2d.text_draw(0, hx + 14, hy + 76, "V               vertex edit mode", theme.MUTED())
+        draw2d.text_draw(0, hx + 14, hy + 58, "LMB             select / draw / move", theme.MUTED())
+        draw2d.text_draw(
+            0,
+            hx + 14,
+            hy + 76,
+            "Alt + LMB drag  move selection on Y axis",
+            theme.MUTED()
+        )
         draw2d.text_draw(
             0,
             hx + 14,
             hy + 94,
-            "WASD + RMB      fly / look (Shift = fast)",
+            "Shift + LMB     extrude / intrude face",
             theme.MUTED()
         )
-        draw2d.text_draw(0, hx + 14, hy + 112, "Arrows          nudge selection", theme.MUTED())
-        draw2d.text_draw(0, hx + 14, hy + 130, "Ctrl+H          hollow selection", theme.MUTED())
+        draw2d.text_draw(0, hx + 14, hy + 112, "RMB drag        look (WASD = fly)", theme.MUTED())
+        draw2d.text_draw(0, hx + 14, hy + 130, "Arrows          nudge selection", theme.MUTED())
+        draw2d.text_draw(0, hx + 14, hy + 148, "Ctrl+H          hollow selection", theme.MUTED())
         draw2d.text_draw(
             0,
             hx + 14,
-            hy + 148,
+            hy + 166,
             "Del / Ctrl+S / Ctrl+O   delete / save / load",
             theme.DIM()
         )

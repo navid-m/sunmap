@@ -30,6 +30,35 @@ fn raypoint(ray: math.Ray, t: f64) math.Vec3 = {
     return math.v3_add(ray.origin, math.v3_mul(ray.dir, t))
 }
 
+// Intersect the mouse ray with a plane that contains the drag axis and is as
+// square to the view as possible, then return the distance travelled along the
+// axis. This is what makes axis-constrained drags (face extrusion, Alt+drag)
+// follow the mouse sensibly.
+fn drag_axis_delta(ray: math.Ray, axis: math.Vec3, start: math.Vec3) f64 = {
+    val an = math.v3_normalize(axis)
+    val perp = math.v3_sub(ray.dir, math.v3_mul(an, math.v3_dot(ray.dir, an)))
+    val len = math.v3_len(perp)
+    val pn: mut math.Vec3 = perp
+    if len < 0.0001 {
+        val fallback = math.v3_cross(an, math.v3(0.0, 0.0, 1.0))
+        val flen = math.v3_len(fallback)
+        if flen < 0.0001 {
+            pn = math.v3(1.0, 0.0, 0.0)
+        } else {
+            pn = math.v3_mul(fallback, 1.0 / flen)
+        }
+    } else {
+        pn = math.v3_mul(perp, 1.0 / len)
+    }
+    val plane = math.Plane{normal: pn, dist: math.v3_dot(pn, start)}
+    val t = math.ray_plane(ray, plane)
+    if t <= 0.0 {
+        return 0.0
+    }
+    val p = raypoint(ray, t)
+    return math.v3_dot(math.v3_sub(p, start), an)
+}
+
 fn ground_point(ray: math.Ray) math.Vec3 = {
     val t = math.ray_plane(ray, math.Plane{normal: math.v3(0.0, 0.0, 1.0), dist: 0.0})
     if t < 0.0 {
@@ -226,6 +255,7 @@ fn begin_move(ui: mut ref uistate.UIState, bi: i32, start: math.Vec3) void = {
     ui.drag_brush = bi
     ui.drag_start_world = start
     ui.drag_last_delta = math.v3(0.0, 0.0, 0.0)
+    ui.drag_axis = c.AXIS_FREE
     ui.drag_moved = false
 }
 
@@ -251,9 +281,68 @@ fn viewport_down(
     }
 
     val hit = world.raycast(w, ray)
+
+    // Alt+drag always moves the current selection along world Y, regardless of
+    // mode (as long as we are not dragging an individual vertex).
+    if inp.alt && ui.mode != c.MODE_VERTEX && hit.brush >= 0 {
+        val b = world.brush_at(w, hit.brush)
+        if !b.selected {
+            select_only(w, hit.brush)
+        }
+        begin_move(ui, hit.brush, ground_point(ray))
+        ui.drag_axis = c.AXIS_Y
+        return
+    }
+
     if ui.mode == c.MODE_FACE {
         ui.face_brush = hit.brush
         ui.face_index = hit.face
+        if hit.brush >= 0 {
+            val b: mut ref brush.Brush = world.brush_at(w, hit.brush)
+            if inp.shift {
+                if !b.selected {
+                    select_only(w, hit.brush)
+                }
+                begin_extrude(ui, b, hit.brush, hit.face, hit.point)
+                return
+            }
+            if inp.ctrl {
+                b.selected = !b.selected
+            } else {
+                select_only(w, hit.brush)
+            }
+            ui.drag_kind = c.DRAG_NONE
+            return
+        }
+        if !inp.ctrl && !inp.shift {
+            world.deselect_all(w)
+        }
+        ui.drag_kind = c.DRAG_NONE
+        return
+    }
+
+    if ui.mode == c.MODE_SELECT {
+        if hit.brush >= 0 {
+            val b: mut ref brush.Brush = world.brush_at(w, hit.brush)
+            if inp.shift {
+                b.selected = true
+            } elif inp.ctrl {
+                b.selected = !b.selected
+            } else {
+                select_only(w, hit.brush)
+            }
+            ui.face_brush = -1
+            ui.face_index = -1
+            ui.drag_kind = c.DRAG_NONE
+            return
+        }
+        if !inp.shift && !inp.ctrl {
+            world.deselect_all(w)
+            ui.face_brush = -1
+            ui.face_index = -1
+        }
+        ui.drag_kind = c.DRAG_NONE
+        return
     }
 
     if hit.brush >= 0 {
@@ -277,13 +366,13 @@ fn viewport_down(
         return
     }
 
-    if !inp.ctrl {
+    if !inp.ctrl && !inp.alt {
         world.deselect_all(w)
         ui.face_brush = -1
         ui.face_index = -1
     }
 
-    if ui.mode == c.MODE_BRUSH {
+    if ui.mode == c.MODE_BRUSH && !inp.ctrl && !inp.alt {
         ui.drag_kind = c.DRAG_DRAW
         ui.drag_start_world = ground_point(ray)
         ui.drag_moved = false
@@ -301,10 +390,19 @@ fn viewport_move(
 ) void = {
     val ray = camera.screen_ray(cam, inp.mx, inp.my, width, height)
     if ui.drag_kind == c.DRAG_MOVE {
-        val p = ground_point(ray)
-        val dx = math.snapf(p.x - ui.drag_start_world.x, ui.grid)
-        val dz = math.snapf(p.y - ui.drag_start_world.y, ui.grid)
-        val delta = math.v3(dx, 0.0, dz)
+        val delta: mut math.Vec3 = math.v3(0.0, 0.0, 0.0)
+        if ui.drag_axis == c.AXIS_Y {
+            val dy = math.snapf(
+                drag_axis_delta(ray, math.v3(0.0, 1.0, 0.0), ui.drag_start_world),
+                ui.grid
+            )
+            delta = math.v3(0.0, dy, 0.0)
+        } else {
+            val p = ground_point(ray)
+            val dx = math.snapf(p.x - ui.drag_start_world.x, ui.grid)
+            val dz = math.snapf(p.y - ui.drag_start_world.y, ui.grid)
+            delta = math.v3(dx, 0.0, dz)
+        }
         val inc = math.v3_sub(delta, ui.drag_last_delta)
         if math.v3_len_sq(inc) > 0.000001 {
             world.nudge_selected(w, inc)
@@ -321,11 +419,8 @@ fn viewport_move(
         if ui.drag_face >= 0 && ui.drag_face < b.face_count {
             val f = brush.face(b, ui.drag_face)
             val n = f.normal
-            val plane = math.Plane{normal: n, dist: ui.drag_face_dist}
-            val t = math.ray_plane(ray, plane)
-            if t > 0.0 {
-                val p = raypoint(ray, t)
-                val proj = math.snapf(math.v3_dot(math.v3_sub(p, ui.drag_start_world), n), ui.grid)
+            val proj = math.snapf(drag_axis_delta(ray, n, ui.drag_start_world), ui.grid)
+            if math.fabs(proj) > 0.0001 || ui.drag_moved {
                 val target: mut f64 = ui.drag_face_dist + proj
                 if target < ui.drag_limit + 0.5 {
                     target = ui.drag_limit + 0.5
@@ -567,18 +662,25 @@ fn handle_key(
         return
     }
     if sym == input.KEY_1 {
-        ui.mode = c.MODE_BRUSH
+        uistate.set_mode(ui, c.MODE_SELECT)
+        uistate.set_status(ui, "Select mode: click brushes to select.", {})
         return
     }
     if sym == input.KEY_2 {
-        ui.mode = c.MODE_FACE
+        uistate.set_mode(ui, c.MODE_BRUSH)
+        uistate.set_status(ui, "Brush mode: drag empty space to draw.", {})
         return
     }
-    if sym == input.KEY_3 || sym == input.KEY_V {
+    if sym == input.KEY_3 {
+        uistate.set_mode(ui, c.MODE_FACE)
+        uistate.set_status(ui, "Face mode: click a face, Shift+drag to extrude.", {})
+        return
+    }
+    if sym == input.KEY_4 || sym == input.KEY_V {
         if ui.mode == c.MODE_VERTEX && sym == input.KEY_V {
-            ui.mode = c.MODE_BRUSH
+            uistate.set_mode(ui, c.MODE_SELECT)
         } else {
-            ui.mode = c.MODE_VERTEX
+            uistate.set_mode(ui, c.MODE_VERTEX)
             uistate.set_status(ui, "Vertex mode: drag a point of a selected brush.", {})
         }
         return
